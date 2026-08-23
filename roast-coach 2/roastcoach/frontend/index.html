@@ -1,0 +1,217 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1f1a17; background: transparent;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #efe9e3; } }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 9px; cursor: pointer;
+    border: 1px solid transparent; background: #E8622A; color: #fff; transition: filter .12s;
+  }
+  button:hover { filter: brightness(1.06); }
+  button.quiet { background: transparent; border-color: currentColor; color: inherit; font-weight: 500; }
+  button[disabled] { opacity: .5; cursor: default; filter: none; }
+  .note { opacity: .72; font-size: 13px; margin-top: 8px; }
+  .folder { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+  .bar { height: 6px; border-radius: 99px; background: rgba(128,110,100,.25); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; background: #E8622A; width: 0; transition: width .2s; }
+  .warn { color: #b4471f; }
+</style>
+</head>
+<body>
+<div class="row">
+  <button id="pick">Choose roasts folder</button>
+  <button id="sync" class="quiet" hidden>Check for new roasts</button>
+  <button id="forget" class="quiet" hidden>Disconnect</button>
+</div>
+<div class="bar" hidden id="barwrap"><i id="bar"></i></div>
+<div class="note" id="note"></div>
+
+<script>
+const BATCH = 12;
+const ROAST_HINTS = ["beanTemperature", "drumTemperature", "roastName", "beanDerivative"];
+let args = {};
+let handle = null;
+let busy = false;
+
+/* --- Streamlit component protocol, without the npm package --- */
+function send(value) {
+  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value }, "*");
+}
+function height(h) {
+  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+}
+window.addEventListener("message", (event) => {
+  if (event.data.type !== "streamlit:render") return;
+  args = event.data.args || {};
+  render();
+});
+window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+
+/* --- remembering the folder between visits --- */
+function idb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("roast-coach", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function remember(value) {
+  const db = await idb();
+  await new Promise((resolve) => {
+    const tx = db.transaction("handles", "readwrite");
+    tx.objectStore("handles").put(value, "roasts");
+    tx.oncomplete = resolve;
+  });
+}
+async function recall() {
+  try {
+    const db = await idb();
+    return await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const request = tx.objectStore("handles").get("roasts");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch (error) { return null; }
+}
+
+/* --- reading the folder --- */
+function looksLikeRoast(name, text) {
+  const head = text.slice(0, 3000);
+  const trimmed = head.replace(/^\s+/, "");
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return ROAST_HINTS.some((hint) => head.includes(hint));
+  }
+  const lower = head.toLowerCase();
+  return lower.includes("timeline") && (lower.includes("ibts") || lower.includes("bean probe"));
+}
+
+async function scan() {
+  if (!handle || busy) return;
+  busy = true;
+  const known = args.known || {};
+  const note = document.getElementById("note");
+  const barwrap = document.getElementById("barwrap");
+  const bar = document.getElementById("bar");
+
+  try {
+    const candidates = [];
+    for await (const entry of handle.values()) {
+      if (entry.kind !== "file" || entry.name.startsWith(".")) continue;
+      const extension = entry.name.includes(".") ? entry.name.split(".").pop().toLowerCase() : "";
+      if (!["", "json", "csv"].includes(extension)) continue;
+      const file = await entry.getFile();
+      const previous = known[entry.name];
+      if (previous && Math.abs(previous[0] - file.lastModified / 1000) < 1 && previous[1] === file.size) continue;
+      candidates.push({ entry, file });
+    }
+
+    if (!candidates.length) {
+      note.textContent = "Nothing new in " + handle.name + ".";
+      barwrap.hidden = true;
+      send({ action: "scanned", folder: handle.name, files: [], remaining: 0, total: 0 });
+      busy = false;
+      return;
+    }
+
+    barwrap.hidden = false;
+    const take = candidates.slice(0, BATCH);
+    const files = [];
+    for (let index = 0; index < take.length; index += 1) {
+      const { entry, file } = take[index];
+      const text = await file.text();
+      if (!looksLikeRoast(entry.name, text)) continue;
+      files.push({ name: entry.name, text, modified: file.lastModified / 1000, size: file.size });
+      bar.style.width = Math.round(((index + 1) / take.length) * 100) + "%";
+    }
+
+    const remaining = candidates.length - take.length;
+    note.textContent = files.length
+      ? "Reading " + files.length + " roast(s) from " + handle.name +
+        (remaining ? " — " + remaining + " to go" : "")
+      : "No roast files among the " + take.length + " checked.";
+    send({ action: "files", folder: handle.name, files, remaining, total: candidates.length });
+  } catch (error) {
+    note.innerHTML = '<span class="warn">' + error.message + "</span>";
+    send({ action: "error", message: String(error.message || error) });
+  }
+  busy = false;
+}
+
+async function choose() {
+  try {
+    handle = await window.showDirectoryPicker({ id: "roast-coach-roasts", mode: "read" });
+    await remember(handle);
+    document.getElementById("sync").hidden = false;
+    document.getElementById("forget").hidden = false;
+    document.getElementById("note").textContent = "Connected to " + handle.name + ".";
+    height(document.body.scrollHeight + 8);
+    scan();
+  } catch (error) {
+    if (error && error.name !== "AbortError") {
+      document.getElementById("note").innerHTML = '<span class="warn">' + error.message + "</span>";
+    }
+  }
+}
+
+async function restore() {
+  const saved = await recall();
+  if (!saved) return false;
+  const permission = await saved.queryPermission({ mode: "read" });
+  if (permission === "granted") {
+    handle = saved;
+    document.getElementById("pick").textContent = "Change folder";
+    document.getElementById("sync").hidden = false;
+    document.getElementById("forget").hidden = false;
+    document.getElementById("note").textContent = "Connected to " + saved.name + ".";
+    if (args.autosync) scan();
+    return true;
+  }
+  if (permission === "prompt") {
+    document.getElementById("pick").textContent = "Reconnect " + saved.name;
+    document.getElementById("pick").onclick = async () => {
+      const granted = await saved.requestPermission({ mode: "read" });
+      if (granted === "granted") { handle = saved; document.getElementById("sync").hidden = false; scan(); }
+      else { choose(); }
+    };
+    return true;
+  }
+  return false;
+}
+
+function render() {
+  const supported = typeof window.showDirectoryPicker === "function";
+  const note = document.getElementById("note");
+  if (!supported) {
+    document.getElementById("pick").disabled = true;
+    note.innerHTML = "This browser cannot grant folder access. Chrome or Edge can — " +
+      "or upload your roasts below, which works everywhere.";
+  }
+  height(document.body.scrollHeight + 8);
+}
+
+document.getElementById("pick").onclick = choose;
+document.getElementById("sync").onclick = scan;
+document.getElementById("forget").onclick = async () => {
+  handle = null;
+  await remember(null);
+  document.getElementById("sync").hidden = true;
+  document.getElementById("forget").hidden = true;
+  document.getElementById("pick").textContent = "Choose roasts folder";
+  document.getElementById("note").textContent = "Folder disconnected. Your imported roasts are still here.";
+  send({ action: "disconnected" });
+};
+
+restore().then(render);
+setTimeout(render, 200);
+</script>
+</body>
+</html>
