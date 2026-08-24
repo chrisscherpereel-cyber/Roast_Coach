@@ -16,17 +16,30 @@ Runs entirely in the cloud. Nothing is installed on the machine that does the ro
 
 ## Getting your roasts in
 
-**Connect the folder** — in Chrome or Edge, point the app at RoasTime's roasts folder
-once. The browser holds that permission, so every later visit picks up whatever is new
-with a click. The folder is read in your browser; only the roast files reach the app.
+**Connect a folder** — in Chrome or Edge, point the app at a folder of roasts once. The
+browser holds that permission, so every later visit picks up whatever is new with a click.
+The folder is read in your browser; only the roast files reach the app.
 
-| System | Folder |
+One catch, and it is Chrome's, not the app's: **Chrome refuses to share any folder inside
+your system Library**, answering *"this folder contains system files"*. That is exactly
+where RoasTime keeps its roasts —
+
+| System | RoasTime's folder |
 | --- | --- |
 | macOS | `~/Library/Application Support/roast-time/roasts` |
 | Windows | `%APPDATA%\roast-time\roasts` |
 
-**Or upload** — drag in roast files or a zip of the folder. Works in every browser,
-Safari included.
+— so make a copy somewhere ordinary and connect that instead. On macOS:
+
+```bash
+mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\ Support/roast-time/roasts/. ~/Documents/RoastCoach/
+```
+
+Run it again whenever you want the newer roasts. Nothing ever writes back to RoasTime's
+folder — the app only reads.
+
+**Or upload** — drag in roast files or a zip of the folder. Works in every browser, Safari
+included, from any folder, with no copying.
 
 Both RoasTime formats are read: the per-roast JSON files, and the single-roast CSV
 export. Every roast is identified by **date and coffee**; the coffee is read from the
@@ -157,7 +170,11 @@ roastcoach/
   origin.py                 the coffee's country, read from the roast name
   demo_data.py              a simulated roasting history
   folder.py, frontend/      browser folder access
-assets/                     logo and icons
+assets/                     the flame mark: logo-mark.svg (bare), icon.svg (tile),
+                            logo-full.svg (lockup), icon-64/256.png
 ```
+
+The mark is a flame with the roast curve cut out of it — a real mask, so the curve shows
+whatever is behind it and the mark works on any ground.
 
 Built on the Aillio Bullet's own recordings. Not affiliated with Aillio.

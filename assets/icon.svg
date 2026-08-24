@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="256" height="256" role="img" aria-label="Roast Coach">
+  <defs>
+    <linearGradient id="rc-ground" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2A1409"/>
+      <stop offset="1" stop-color="#150A04"/>
+    </linearGradient>
+    <linearGradient id="rc-ember" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0" stop-color="#E8622A"/>
+      <stop offset="0.55" stop-color="#F79034"/>
+      <stop offset="1" stop-color="#FFC15E"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="30" fill="url(#rc-ground)"/>
+
+  <path d="M 64 14 C 86 40 100 52 100 74 A 36 36 0 0 1 28 74
+           C 28 56 42 48 48 30 C 58 42 54 56 64 60 C 74 52 74 34 64 14 Z"
+        fill="url(#rc-ember)"/>
+
+  <!-- the roast curve, carved back out to the ground -->
+  <path d="M 44 92 C 56 88 57 70 70 61 C 76 57 80 56 84 55"
+        fill="none" stroke="#2A1409" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="85" cy="55" r="5.5" fill="#2A1409"/>
+</svg>

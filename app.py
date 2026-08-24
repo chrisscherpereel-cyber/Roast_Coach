@@ -81,9 +81,15 @@ def import_files(files: list[dict]) -> dict:
 
 @st.cache_data
 def _mark() -> str:
-    """The logo, sized by its container rather than by its own attributes."""
-    svg = (ASSETS / "logo-mark.svg").read_text()
-    return svg.replace('width="64" height="64"', 'width="100%" height="100%"')
+    """The logo as a data URI.
+
+    Not inline SVG: Streamlit sanitises the HTML it renders and strips the mask
+    that cuts the roast curve out of the flame, which leaves a plain blob.
+    """
+    import base64
+
+    svg = (ASSETS / "logo-mark.svg").read_bytes()
+    return "data:image/svg+xml;base64," + base64.b64encode(svg).decode()
 
 
 def text_of(value) -> str:
@@ -97,7 +103,7 @@ def text_of(value) -> str:
 def brand_header(subtitle: str):
     st.markdown(
         f"""<div style="display:flex;align-items:center;gap:14px;margin:-8px 0 22px">
-              <div style="width:42px;height:42px;flex:0 0 42px">{_mark()}</div>
+              <img src="{_mark()}" alt="" width="42" height="42" style="flex:0 0 42px">
               <div>
                 <div style="font-size:1.45rem;font-weight:650;letter-spacing:-.02em;line-height:1.1">
                   Roast <span style="color:#E8622A">Coach</span>
@@ -521,12 +527,36 @@ def page_data():
     columns[2].metric("Samples stored", f"{info['samples']:,}")
     columns[3].metric("Last import", (info["imported_at"] or "—")[:16].replace("T", " "))
 
-    st.markdown("### Connect your roasts folder")
+    st.markdown("### Connect a roasts folder")
     st.markdown(
-        "RoasTime writes one file per roast on your computer. Chrome and Edge can give this "
-        "app read access to that one folder — then every visit picks up whatever is new, with "
-        "nothing to upload. The folder is read in your browser; only the roast files reach the app."
+        "Chrome and Edge can give this app read access to one folder — then every visit picks "
+        "up whatever is new, with nothing to upload. The folder is read in your browser; only "
+        "the roast files reach the app."
     )
+
+    st.warning(
+        "**Chrome will not share a folder inside your system Library.** If you point it at "
+        "RoasTime's own folder it answers *“this folder contains system files”* and refuses — "
+        "that is Chrome's rule about where the folder lives, not anything about your files. "
+        "Copy the roasts somewhere ordinary first, then connect the copy.",
+        icon=":material/block:",
+    )
+
+    system = st.radio("Your computer", ["macOS", "Windows"], horizontal=True,
+                      key="copy_platform", label_visibility="collapsed")
+    if system == "macOS":
+        st.caption("Paste into Terminal. Run it again whenever you want the newer roasts.")
+        st.code('mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\\ '
+                'Support/roast-time/roasts/. ~/Documents/RoastCoach/', language="bash")
+        st.caption("Then connect **Documents → RoastCoach** below.")
+    else:
+        st.caption("Paste into PowerShell. Run it again whenever you want the newer roasts.")
+        st.code('robocopy "$env:APPDATA\\roast-time\\roasts" '
+                '"$env:USERPROFILE\\Documents\\RoastCoach" /E', language="powershell")
+        st.caption("Then connect **Documents → RoastCoach** below.")
+
+    st.caption("Already keeping roast exports in Documents, Desktop or Downloads? "
+               "Connect that folder directly — no copying needed.")
 
     from roastcoach.folder import folder_picker
 
@@ -549,7 +579,7 @@ def page_data():
         elif result.get("action") == "error":
             st.error(result.get("message"))
 
-    with st.expander("Where is that folder?"):
+    with st.expander("Where RoasTime keeps your roasts"):
         st.markdown(
             """
 | System | Folder |
@@ -557,14 +587,17 @@ def page_data():
 | macOS | `~/Library/Application Support/roast-time/roasts` |
 | Windows | `%APPDATA%\\roast-time\\roasts` |
 
-On macOS the folder picker starts in your home folder; press **⌘⇧G** in the dialog and
-paste the path to jump straight there.
+Both are inside the folders Chrome refuses to share, which is why the copy above exists.
+Nothing here ever writes to RoasTime's folder — the app only reads copies of the files.
+
+To open the original on macOS: in Finder press **⌘⇧G** and paste the path.
 """
         )
 
     st.divider()
     st.markdown("### Or upload them")
-    st.caption("Works in every browser, including Safari. Drop in roast files, or a zip of the folder.")
+    st.caption("Works in every browser, Safari included, and from any folder — uploading is not "
+               "subject to Chrome's folder rule. Drop in roast files, or a zip of the folder.")
     uploads = st.file_uploader("Roast files or a .zip", accept_multiple_files=True,
                                type=None, key="uploads")
     if uploads and st.button("Import these", type="primary"):

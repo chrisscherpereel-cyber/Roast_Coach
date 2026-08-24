@@ -104,10 +104,14 @@ async function scan() {
 
   try {
     const candidates = [];
+    const skipped = {};
     for await (const entry of handle.values()) {
       if (entry.kind !== "file" || entry.name.startsWith(".")) continue;
       const extension = entry.name.includes(".") ? entry.name.split(".").pop().toLowerCase() : "";
-      if (!["", "json", "csv"].includes(extension)) continue;
+      if (!["", "json", "csv"].includes(extension)) {
+        skipped[extension] = (skipped[extension] || 0) + 1;
+        continue;
+      }
       const file = await entry.getFile();
       const previous = known[entry.name];
       if (previous && Math.abs(previous[0] - file.lastModified / 1000) < 1 && previous[1] === file.size) continue;
@@ -115,7 +119,9 @@ async function scan() {
     }
 
     if (!candidates.length) {
-      note.textContent = "Nothing new in " + handle.name + ".";
+      const others = Object.keys(skipped).map((e) => skipped[e] + " ." + e).join(", ");
+      note.textContent = "Nothing new in " + handle.name + "." +
+        (others ? " (Ignored " + others + " — roasts are .json or .csv.)" : "");
       barwrap.hidden = true;
       send({ action: "scanned", folder: handle.name, files: [], remaining: 0, total: 0 });
       busy = false;
@@ -137,7 +143,8 @@ async function scan() {
     note.textContent = files.length
       ? "Reading " + files.length + " roast(s) from " + handle.name +
         (remaining ? " — " + remaining + " to go" : "")
-      : "No roast files among the " + take.length + " checked.";
+      : "Read " + take.length + " file(s) in " + handle.name + ", but none look like a roast. " +
+        "A RoasTime CSV has a Timeline section; a roast file is JSON.";
     send({ action: "files", folder: handle.name, files, remaining, total: candidates.length });
   } catch (error) {
     note.innerHTML = '<span class="warn">' + error.message + "</span>";
@@ -156,9 +163,14 @@ async function choose() {
     height(document.body.scrollHeight + 8);
     scan();
   } catch (error) {
-    if (error && error.name !== "AbortError") {
-      document.getElementById("note").innerHTML = '<span class="warn">' + error.message + "</span>";
-    }
+    if (!error || error.name === "AbortError") return;   // the picker was closed
+    const blocked = error.name === "SecurityError" || error.name === "NotAllowedError" ||
+                    /system files|not allowed|blocked/i.test(error.message || "");
+    document.getElementById("note").innerHTML = '<span class="warn">' + (blocked
+      ? "Chrome will not share that folder — it sits somewhere Chrome treats as system " +
+        "files. Copy the roasts into Documents and connect the copy, or upload them below."
+      : error.message) + "</span>";
+    height(document.body.scrollHeight + 8);
   }
 }
 
