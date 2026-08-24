@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from roastcoach import charts, coach, demo_data, learning, store
+from roastcoach import auth, charts, coach, db, demo_data, learning, store
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS
 from roastcoach.naming import label_for
@@ -113,6 +113,19 @@ def brand_header(subtitle: str):
             </div>""",
         unsafe_allow_html=True,
     )
+
+
+def account_strip(user: str):
+    """Who is signed in, where the roasts are kept, and the way out."""
+    with st.sidebar:
+        st.divider()
+        st.caption(f"Signed in as **{user}**")
+        st.caption(db.describe())
+        if not db.is_shared():
+            st.caption(":orange[This computer only — see the README to share a database.]")
+        if st.button("Sign out", use_container_width=True):
+            auth.sign_out()
+            st.rerun()
 
 
 def empty_state(message: str):
@@ -527,57 +540,51 @@ def page_data():
     columns[2].metric("Samples stored", f"{info['samples']:,}")
     columns[3].metric("Last import", (info["imported_at"] or "—")[:16].replace("T", " "))
 
-    st.markdown("### Connect a roasts folder")
+    # ---- the one button ---------------------------------------------------
+    st.markdown("### Add roasts")
     st.markdown(
-        "Chrome and Edge can give this app read access to one folder — then every visit picks "
-        "up whatever is new, with nothing to upload. The folder is read in your browser; only "
-        "the roast files reach the app."
+        "Pick the roast files you want. In Chrome and Edge the dialog reopens in whatever "
+        "folder you used last, so after the first time this is: click, select all, done. "
+        "**Files you have already imported are left alone** — only new and changed ones are "
+        "read, so selecting the whole folder every time costs nothing."
     )
 
-    st.warning(
-        "**Chrome will not share a folder inside your system Library.** If you point it at "
-        "RoasTime's own folder it answers *“this folder contains system files”* and refuses — "
-        "that is Chrome's rule about where the folder lives, not anything about your files. "
-        "Copy the roasts somewhere ordinary first, then connect the copy.",
-        icon=":material/block:",
-    )
+    from roastcoach.uploader import add_roasts_button, folder_picker
 
-    system = st.radio("Your computer", ["macOS", "Windows"], horizontal=True,
-                      key="copy_platform", label_visibility="collapsed")
-    if system == "macOS":
-        st.caption("Paste into Terminal. Run it again whenever you want the newer roasts.")
-        st.code('mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\\ '
-                'Support/roast-time/roasts/. ~/Documents/RoastCoach/', language="bash")
-        st.caption("Then connect **Documents → RoastCoach** below.")
-    else:
-        st.caption("Paste into PowerShell. Run it again whenever you want the newer roasts.")
-        st.code('robocopy "$env:APPDATA\\roast-time\\roasts" '
-                '"$env:USERPROFILE\\Documents\\RoastCoach" /E', language="powershell")
-        st.caption("Then connect **Documents → RoastCoach** below.")
+    # Carried across the rerun that updates the counts above.
+    just_imported = bool(st.session_state.pop("_import_done", None))
+    if just_imported:
+        st.success(st.session_state.pop("_import_message", "Imported."))
 
-    st.caption("Already keeping roast exports in Documents, Desktop or Downloads? "
-               "Connect that folder directly — no copying needed.")
+    result = add_roasts_button(known=store.known_sources(), key="add_roasts")
 
-    from roastcoach.folder import folder_picker
+    # A component keeps its last value across reruns, so without this guard the
+    # same batch would be imported again on every rerun. Each message the
+    # browser sends carries a number; each number is acted on once.
+    fresh = (isinstance(result, dict)
+             and result.get("seq") != st.session_state.get("_upload_seq"))
+    if fresh:
+        st.session_state["_upload_seq"] = result.get("seq")
 
-    known = store.known_sources()
-    result = folder_picker(known=known, autosync=True, key="folder_picker")
-
-    if isinstance(result, dict):
-        if result.get("action") == "files" and result.get("files"):
-            report = import_files(result["files"])
-            message = f"Imported {report['added']} new roast(s)"
-            if report["updated"]:
-                message += f", updated {report['updated']}"
-            if result.get("remaining"):
-                message += f" — {result['remaining']} still to read"
-            st.success(message)
-            for problem in report["problems"][:5]:
-                st.caption(problem)
-            if result.get("remaining"):
-                st.rerun()
-        elif result.get("action") == "error":
-            st.error(result.get("message"))
+    if fresh and result.get("action") == "files" and result.get("files"):
+        report = import_files(result["files"])
+        message = f"Imported {report['added']} new roast(s)"
+        if report["updated"]:
+            message += f", updated {report['updated']}"
+        if report["skipped"]:
+            message += f", skipped {report['skipped']} already here"
+        for problem in report["problems"][:5]:
+            st.caption(problem)
+        if result.get("notRoasts"):
+            st.caption("Not roast files, ignored: " + ", ".join(result["notRoasts"][:6]))
+        if result.get("remaining"):
+            st.success(message + f" — {result['remaining']} still to read")
+            st.rerun()
+        st.session_state["_import_message"] = message
+        st.session_state["_import_done"] = True
+        st.rerun()
+    elif fresh and result.get("action") == "none" and result.get("chosen") and not just_imported:
+        st.info(f"All {result['chosen']} of those are already imported. Nothing to do.")
 
     with st.expander("Where RoasTime keeps your roasts"):
         st.markdown(
@@ -587,60 +594,93 @@ def page_data():
 | macOS | `~/Library/Application Support/roast-time/roasts` |
 | Windows | `%APPDATA%\\roast-time\\roasts` |
 
-Both are inside the folders Chrome refuses to share, which is why the copy above exists.
-Nothing here ever writes to RoasTime's folder — the app only reads copies of the files.
+Picking **files** from these folders works. Picking the **folder itself** does not —
+Chrome refuses anything inside your system Library, saying it *contains system files*.
+That is why the button above asks for files.
 
-To open the original on macOS: in Finder press **⌘⇧G** and paste the path.
+On macOS the dialog can jump straight there: press **⌘⇧G** and paste the path. Do that
+once; after that it reopens there by itself.
+
+Nothing is ever written back to RoasTime's folder. The app only reads.
 """
         )
 
     st.divider()
-    st.markdown("### Or upload them")
-    st.caption("Works in every browser, Safari included, and from any folder — uploading is not "
-               "subject to Chrome's folder rule. Drop in roast files, or a zip of the folder.")
-    uploads = st.file_uploader("Roast files or a .zip", accept_multiple_files=True,
-                               type=None, key="uploads")
-    if uploads and st.button("Import these", type="primary"):
-        files = []
-        for uploaded in uploads:
-            payload = uploaded.getvalue()
-            if uploaded.name.lower().endswith(".zip"):
-                import io
-                import zipfile
-                try:
-                    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                        for member in archive.namelist():
-                            if member.endswith("/") or "__MACOSX" in member:
-                                continue
-                            leaf = member.split("/")[-1]
-                            if not leaf or leaf.startswith("."):
-                                continue
-                            data = archive.read(member)
-                            files.append({"name": leaf,
-                                          "text": data.decode("utf-8-sig", errors="replace"),
-                                          "modified": 0, "size": len(data)})
-                except zipfile.BadZipFile:
-                    st.error(f"{uploaded.name} is not a valid zip.")
-            else:
-                files.append({"name": uploaded.name,
-                              "text": payload.decode("utf-8-sig", errors="replace"),
-                              "modified": 0, "size": len(payload)})
-        report = import_files(files)
-        st.success(f"Imported {report['added']} roast(s), skipped {report['skipped']} already here.")
-        for problem in report["problems"][:5]:
-            st.caption(problem)
 
-    st.divider()
-    st.markdown("### Try it without a roaster")
-    if st.button("Load a demo roasting history"):
-        with st.spinner("Simulating a few months of roasting…"):
-            report = import_files(demo_data.as_files(demo_data.history()))
-        st.success(f"Loaded {report['added']} simulated roasts across three coffees.")
-        st.rerun()
+    # ---- everything else --------------------------------------------------
+    with st.expander("Other ways in"):
+        st.markdown("**Drag files in** — works in every browser, including Safari. "
+                    "Roast files, or a zip of the whole folder.")
+        uploads = st.file_uploader("Roast files or a .zip", accept_multiple_files=True,
+                                   type=None, key="uploads", label_visibility="collapsed")
+        if uploads and st.button("Import these"):
+            files = []
+            for uploaded in uploads:
+                payload = uploaded.getvalue()
+                if uploaded.name.lower().endswith(".zip"):
+                    import io
+                    import zipfile
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+                            for member in archive.namelist():
+                                if member.endswith("/") or "__MACOSX" in member:
+                                    continue
+                                leaf = member.split("/")[-1]
+                                if not leaf or leaf.startswith("."):
+                                    continue
+                                data = archive.read(member)
+                                files.append({"name": leaf,
+                                              "text": data.decode("utf-8-sig", errors="replace"),
+                                              "modified": 0, "size": len(data)})
+                    except zipfile.BadZipFile:
+                        st.error(f"{uploaded.name} is not a valid zip.")
+                else:
+                    files.append({"name": uploaded.name,
+                                  "text": payload.decode("utf-8-sig", errors="replace"),
+                                  "modified": 0, "size": len(payload)})
+            report = import_files(files)
+            st.success(f"Imported {report['added']} roast(s), "
+                       f"skipped {report['skipped']} already here.")
+            for problem in report["problems"][:5]:
+                st.caption(problem)
+
+        st.markdown("---")
+        st.markdown("**Connect a whole folder** — Chrome and Edge only, and not a folder "
+                    "inside your system Library. Once connected it syncs on every visit "
+                    "without you picking anything.")
+        folder = folder_picker(known=store.known_sources(), autosync=True, key="folder_picker")
+        if isinstance(folder, dict):
+            if folder.get("action") == "files" and folder.get("files"):
+                report = import_files(folder["files"])
+                st.success(f"Imported {report['added']} new roast(s) from {folder.get('folder')}")
+                if folder.get("remaining"):
+                    st.rerun()
+            elif folder.get("action") == "error":
+                st.error(folder.get("message"))
+
+        st.markdown("---")
+        st.markdown("**Try it without a roaster** — a simulated history of three coffees "
+                    "dialled in over a few months.")
+        if st.button("Load a demo roasting history"):
+            with st.spinner("Simulating a few months of roasting…"):
+                report = import_files(demo_data.as_files(demo_data.history()))
+            st.success(f"Loaded {report['added']} simulated roasts across three coffees.")
+            st.rerun()
+
+    # ---- where it all lives ----------------------------------------------
+    st.markdown("### Where this is stored")
+    if db.is_shared():
+        st.success(f"**{db.describe()}** — every computer signed in to this app sees the same "
+                   "roasts, and they stay put when the app restarts.", icon=":material/cloud:")
+    else:
+        st.warning(f"**{db.describe()}** — this copy only. On Streamlit Community Cloud the "
+                   "file is wiped whenever the app restarts, and other computers see nothing. "
+                   "The README has the five-minute fix: a free Postgres database, one line in "
+                   "secrets.", icon=":material/warning:")
 
     with st.expander("Manage stored roasts"):
-        st.caption("Everything lives in one database file. Removing roasts here does not touch "
-                   "RoasTime — the app only ever reads from it.")
+        st.caption("Removing roasts here does not touch RoasTime — the app only ever reads "
+                   "from it. It does remove them for everyone, though.")
         if st.checkbox("I want to delete everything"):
             if st.button("Delete all roasts, notes and advice"):
                 store.clear()
@@ -651,6 +691,10 @@ To open the original on macOS: in Finder press **⌘⇧G** and paste the path.
 # ---------------------------------------------------------------------------
 
 st.logo(str(ASSETS / "logo-full.svg"), icon_image=str(ASSETS / "icon-64.png"))
+
+# Nothing below this line renders for anyone who has not signed in.
+user = auth.require(logo=_mark())
+account_strip(user)
 
 pages = [
     st.Page(page_coach, title="Coach", icon=":material/insights:"),

@@ -1,0 +1,227 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1f1a17; background: transparent;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #efe9e3; } }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 11px 20px; border-radius: 9px; cursor: pointer;
+    border: 1px solid transparent; background: #E8622A; color: #fff; transition: filter .12s;
+  }
+  button:hover { filter: brightness(1.06); }
+  button.quiet { background: transparent; border-color: currentColor; color: inherit; font-weight: 500; }
+  button[disabled] { opacity: .5; cursor: default; filter: none; }
+  .note { opacity: .75; font-size: 13px; margin-top: 10px; }
+  .note b { font-weight: 600; opacity: 1; }
+  .bar { height: 6px; border-radius: 99px; background: rgba(128,110,100,.25); overflow: hidden; margin-top: 10px; }
+  .bar > i { display: block; height: 100%; background: #E8622A; width: 0; transition: width .2s; }
+  .warn { color: #b4471f; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div class="row">
+  <button id="pick">Add roasts</button>
+  <button id="clear" class="quiet" hidden>Cancel</button>
+  <input type="file" id="fallback" multiple accept=".csv,.json,.txt">
+</div>
+<div class="bar" hidden id="barwrap"><i id="bar"></i></div>
+<div class="note" id="note"></div>
+
+<script>
+const BATCH = 10;
+const ROAST_HINTS = ["beanTemperature", "drumTemperature", "roastName", "beanDerivative"];
+
+let args = {};
+let queue = [];          // files still to read and send
+let chosen = 0;          // how many were selected this time
+let alreadyHad = 0;      // how many of those were already imported
+let sequence = 0;        // makes every message a new value, so Streamlit reruns
+let working = false;
+
+/* --- Streamlit component protocol, without the npm package --- */
+function send(value) {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setComponentValue", value }, "*");
+}
+function height() {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setFrameHeight",
+      height: document.body.scrollHeight + 8 }, "*");
+}
+window.addEventListener("message", (event) => {
+  if (event.data.type !== "streamlit:render") return;
+  args = event.data.args || {};
+  if (queue.length) pump();          // the app asked for the next batch
+  height();
+});
+window.parent.postMessage(
+  { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+
+/* --- remembering which folder, so the picker opens there next time --- */
+function idb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("roast-coach", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function remember(handle) {
+  try {
+    const db = await idb();
+    await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readwrite");
+      tx.objectStore("handles").put(handle, "lastFile");
+      tx.oncomplete = resolve;
+    });
+  } catch (error) { /* the picker still remembers by id */ }
+}
+async function recall() {
+  try {
+    const db = await idb();
+    return await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const request = tx.objectStore("handles").get("lastFile");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch (error) { return null; }
+}
+
+/* --- what counts as new --- */
+function isNew(file) {
+  const previous = (args.known || {})[file.name];
+  if (!previous) return true;
+  const sameTime = Math.abs(previous[0] - file.lastModified / 1000) < 1;
+  return !(sameTime && previous[1] === file.size);
+}
+
+function looksLikeRoast(text) {
+  const head = text.slice(0, 4000);
+  const trimmed = head.replace(/^\s+/, "");
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return ROAST_HINTS.some((hint) => head.includes(hint));
+  }
+  const lower = head.toLowerCase();
+  return lower.includes("timeline") && (lower.includes("ibts") || lower.includes("bean probe"));
+}
+
+/* --- reading and sending --- */
+function describe(extra) {
+  const parts = [];
+  if (chosen) parts.push("<b>" + chosen + "</b> file" + (chosen === 1 ? "" : "s") + " chosen");
+  if (alreadyHad) parts.push(alreadyHad + " already imported");
+  if (extra) parts.push(extra);
+  document.getElementById("note").innerHTML = parts.join(" · ");
+  height();
+}
+
+async function pump() {
+  if (working || !queue.length) return;
+  working = true;
+  const take = queue.splice(0, BATCH);
+  const files = [];
+  const skipped = [];
+
+  document.getElementById("barwrap").hidden = false;
+  for (let index = 0; index < take.length; index += 1) {
+    const file = take[index];
+    try {
+      const text = await file.text();
+      if (looksLikeRoast(text)) {
+        files.push({ name: file.name, text, modified: file.lastModified / 1000, size: file.size });
+      } else {
+        skipped.push(file.name);
+      }
+    } catch (error) {
+      skipped.push(file.name);
+    }
+    const done = chosen - alreadyHad - queue.length - (take.length - index - 1);
+    document.getElementById("bar").style.width =
+      Math.round((done / Math.max(1, chosen - alreadyHad)) * 100) + "%";
+  }
+
+  sequence += 1;
+  if (queue.length) {
+    describe(queue.length + " to go");
+  } else {
+    document.getElementById("barwrap").hidden = true;
+    document.getElementById("clear").hidden = true;
+    describe("added");
+  }
+  send({ action: "files", files, remaining: queue.length, notRoasts: skipped, seq: sequence });
+  working = false;
+}
+
+function take(fileList) {
+  const all = [...fileList];
+  chosen = all.length;
+  queue = all.filter(isNew);
+  alreadyHad = chosen - queue.length;
+  document.getElementById("clear").hidden = queue.length === 0;
+
+  if (!queue.length) {
+    document.getElementById("barwrap").hidden = true;
+    describe(chosen ? "nothing new to add" : "");
+    sequence += 1;
+    send({ action: "none", chosen, alreadyHad, seq: sequence });
+    return;
+  }
+  describe(queue.length + " new");
+  pump();
+}
+
+async function pick() {
+  if (window.showOpenFilePicker) {
+    try {
+      const options = {
+        multiple: true,
+        id: "roast-coach-roasts",           // Chrome reopens where you left off
+        types: [{ description: "Roast files",
+                  accept: { "text/csv": [".csv"], "application/json": [".json"] } }],
+      };
+      const start = await recall();
+      if (start) options.startIn = start;
+      let handles;
+      try {
+        handles = await window.showOpenFilePicker(options);
+      } catch (error) {
+        if (error.name === "AbortError") return;
+        delete options.startIn;             // the remembered file moved or went away
+        handles = await window.showOpenFilePicker(options);
+      }
+      if (!handles.length) return;
+      await remember(handles[0]);
+      take(await Promise.all(handles.map((handle) => handle.getFile())));
+    } catch (error) {
+      if (error && error.name === "AbortError") return;
+      document.getElementById("note").innerHTML =
+        '<span class="warn">' + (error.message || error) + "</span>";
+      height();
+    }
+    return;
+  }
+  document.getElementById("fallback").click();   // Safari and Firefox
+}
+
+document.getElementById("pick").onclick = pick;
+document.getElementById("fallback").onchange = (event) => take(event.target.files);
+document.getElementById("clear").onclick = () => {
+  queue = [];
+  document.getElementById("barwrap").hidden = true;
+  document.getElementById("clear").hidden = true;
+  describe("stopped");
+};
+
+height();
+setTimeout(height, 200);
+</script>
+</body>
+</html>

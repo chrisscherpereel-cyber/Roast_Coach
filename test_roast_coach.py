@@ -8,14 +8,21 @@ the roasts alone.
     python3 test_roast_coach.py
 """
 
+import json
 import os
 import tempfile
 
 os.environ["ROAST_COACH_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
+os.environ["ROAST_COACH_PASSWORDS"] = "tester:roast-coach-test"
+
+# Run every test against Postgres too by setting this to a connection string.
+SHARED_URL = os.environ.get("ROAST_COACH_TEST_POSTGRES")
+if SHARED_URL:
+    os.environ["ROAST_COACH_DATABASE_URL"] = SHARED_URL
 
 import pandas as pd  # noqa: E402
 
-from roastcoach import coach, demo_data, learning, store  # noqa: E402
+from roastcoach import auth, coach, db, demo_data, learning, store  # noqa: E402
 from roastcoach.fields import parse_roast_text  # noqa: E402
 
 PASS, FAIL = "  ✓", "  ✗"
@@ -26,6 +33,10 @@ def check(condition, description, detail=""):
     assert condition, description
 
 
+print("\nWHERE IT IS STORED")
+check(bool(db.database_url()), "a database is resolved", db.describe())
+check(db.dialect() in ("sqlite", "postgresql"), f"talking to {db.dialect()}")
+
 print("\nIMPORT")
 store.clear()
 roasts = demo_data.history()
@@ -34,11 +45,54 @@ check(report["added"] == len(roasts), f"imported all {len(roasts)} simulated roa
 check(store.add_roasts(demo_data.as_files(roasts))["skipped"] == len(roasts),
       "a second import skips everything unchanged")
 
+renamed = demo_data.as_files(roasts[:3])
+for position, item in enumerate(renamed):
+    item["name"] = f"copy-{position}.json"
+    item["modified"] += 1000
+    item["size"] += 1
+again = store.add_roasts(renamed)
+check(again["added"] == 0 and again["skipped"] == 3,
+      "the same roast under a new name is recognised by its contents, not added twice")
+
+before = len(store.load_roasts())
+store.add_roasts([{"name": "junk.csv", "text": "not,a,roast\n1,2,3", "modified": 5, "size": 16}])
+check(len(store.load_roasts()) == before, "a file that is not a roast changes nothing")
+
 frame = store.load_roasts()
 check(len(frame) == len(roasts), "every roast comes back out")
 check(frame["coffee"].nunique() == 3, "roasts group into three coffees")
 check(frame["label"].str.match(r"\d{4}-\d{2}-\d{2} · .+").all(),
       "every roast is identified by date and coffee")
+
+print("\nPERSISTENCE — the database outlives the process")
+db.reset()                       # every connection dropped, as on a restart
+reopened = store.load_roasts()
+check(len(reopened) == len(roasts), "roasts are still there after reconnecting",
+      f"{len(reopened)} roasts")
+check(store.summary()["samples"] > 10000, "so are their curves",
+      f"{store.summary()['samples']:,} samples")
+
+if SHARED_URL:
+    print("\nTWO COMPUTERS — a separate process, the same roasts")
+    import subprocess
+    import sys
+
+    script = (
+        "import os, json;"
+        "from roastcoach import demo_data, store;"
+        "roasts = demo_data.history(weeks=2, seed=99)[:2];"
+        "print(json.dumps(store.add_roasts(demo_data.as_files(roasts))))"
+    )
+    other = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
+                           env={**os.environ, "ROAST_COACH_DATABASE_URL": SHARED_URL},
+                           cwd=os.path.dirname(os.path.abspath(__file__)))
+    added = json.loads(other.stdout.strip().splitlines()[-1])["added"] if other.returncode == 0 else 0
+    check(added == 2, "another computer imports into the same database",
+          "" if added == 2 else other.stderr[-300:])
+    check(len(store.load_roasts()) == len(roasts) + 2,
+          "and this one sees those roasts without restarting")
+    store.forget([r["uid"] for r in demo_data.history(weeks=2, seed=99)[:2]])
+    check(len(store.load_roasts()) == len(roasts), "removing them removes them for everyone")
 
 print("\nCURVES")
 first = frame.iloc[0]
@@ -132,10 +186,22 @@ if os.path.exists(sample):
 else:
     print("  · no sample CSV on this machine, skipped")
 
+print("\nSIGNING IN")
+stored = auth.hash_password("a good long password")
+check(auth.verify("a good long password", stored), "the right password is accepted")
+check(not auth.verify("a good long passwore", stored), "a wrong password is not")
+check(stored.startswith("pbkdf2_sha256$") and "a good long password" not in stored,
+      "the password itself is never in the hash")
+check(auth.hash_password("same") != auth.hash_password("same"),
+      "two accounts with the same password get different hashes")
+check(auth.accounts() == {"tester": "roast-coach-test"}, "accounts are read from the environment")
+check(auth.weak_accounts() == ["tester"], "an unhashed password in secrets is called out")
+
 print("\nTHE APP")
 from streamlit.testing.v1 import AppTest  # noqa: E402
 
 app = AppTest.from_file("app.py", default_timeout=300)
+app.session_state[auth.SESSION_KEY] = "tester"
 app.run()
 check(not app.exception, "the app starts with roasts in the database")
 check(any(m.label == "Roasts" for m in app.metric), "the coach page reports the roast count")
@@ -143,6 +209,7 @@ check(any(m.label == "Roasts" for m in app.metric), "the coach page reports the 
 for page in ("Coach", "Roasts", "Coffees", "Learning", "Data"):
     os.environ["ROAST_COACH_PAGE"] = page
     opened = AppTest.from_file("app.py", default_timeout=300)
+    opened.session_state[auth.SESSION_KEY] = "tester"
     opened.run()
     detail = "" if not opened.exception else str(opened.exception[0].message).strip().splitlines()[-1]
     check(not opened.exception, f"the {page} page renders with roasts loaded", detail)
@@ -150,7 +217,16 @@ os.environ.pop("ROAST_COACH_PAGE", None)
 
 store.clear()
 empty = AppTest.from_file("app.py", default_timeout=120)
+empty.session_state[auth.SESSION_KEY] = "tester"
 empty.run()
 check(not empty.exception, "the app starts with an empty database")
+
+locked = AppTest.from_file("app.py", default_timeout=120)
+locked.run()
+check(not locked.exception, "the app starts for someone who has not signed in")
+check(not any(m.label == "Roasts" for m in locked.metric),
+      "and shows them nothing until they do")
+check(any("Sign in" in str(b.label) for b in locked.button) or bool(locked.text_input),
+      "it shows them the sign-in form instead")
 
 print("\nALL OK\n")

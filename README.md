@@ -16,38 +16,56 @@ Runs entirely in the cloud. Nothing is installed on the machine that does the ro
 
 ## Getting your roasts in
 
-**Connect a folder** — in Chrome or Edge, point the app at a folder of roasts once. The
-browser holds that permission, so every later visit picks up whatever is new with a click.
-The folder is read in your browser; only the roast files reach the app.
+**Press Add roasts, pick the files.** In Chrome and Edge the dialog reopens in whatever
+folder you used last, so after the first visit this is: click, select all, done. Files
+already imported are skipped in the browser without being opened, so selecting the whole
+folder every time costs nothing — and a file that turns up under a new name is recognised
+by its contents, not added twice.
 
-One catch, and it is Chrome's, not the app's: **Chrome refuses to share any folder inside
-your system Library**, answering *"this folder contains system files"*. That is exactly
-where RoasTime keeps its roasts —
+RoasTime keeps the originals here:
 
-| System | RoasTime's folder |
+| System | Folder |
 | --- | --- |
 | macOS | `~/Library/Application Support/roast-time/roasts` |
 | Windows | `%APPDATA%\roast-time\roasts` |
 
-— so make a copy somewhere ordinary and connect that instead. On macOS:
+Picking **files** out of those folders works. Picking the **folder itself** does not:
+Chrome refuses to share anything inside your system Library, answering *"this folder
+contains system files"*. That is a rule about where the folder lives, not about your
+files, and it is why the button asks for files. On macOS the dialog can jump straight
+there — press **⌘⇧G** and paste the path, once.
 
-```bash
-mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\ Support/roast-time/roasts/. ~/Documents/RoastCoach/
-```
+Nothing is ever written back to RoasTime's folder. The app only reads.
 
-Run it again whenever you want the newer roasts. Nothing ever writes back to RoasTime's
-folder — the app only reads.
-
-**Or upload** — drag in roast files or a zip of the folder. Works in every browser, Safari
-included, from any folder, with no copying.
+Under **Other ways in** there is also drag-and-drop (any browser, or a zip of the whole
+folder), whole-folder sync for folders Chrome will share, and a **demo roasting history**
+— three coffees dialled in over a few months — so you can see how it all works before
+connecting anything.
 
 Both RoasTime formats are read: the per-roast JSON files, and the single-roast CSV
 export. Every roast is identified by **date and coffee**; the coffee is read from the
 roast name and you can correct it, along with origin, process, variety, weights, roast
 level, rating, cupping score and notes.
 
-There is also a **demo roasting history** — three coffees dialled in over a few months —
-so you can see how it works before connecting anything.
+---
+
+## Sharing it with other people
+
+Out of the box the app keeps everything in a SQLite file beside itself, which is fine for
+one computer. For a group it needs two things, and **[SETUP.md](SETUP.md) walks through
+both in about fifteen minutes**:
+
+- **A shared database.** Point `[database] url` in secrets at a Postgres server — a free
+  Supabase project does it — and every computer signed in sees the same roasts. This also
+  fixes something easy to miss: Streamlit Community Cloud wipes its own disk on every
+  restart, so without this, roasts imported today are gone tomorrow.
+- **A sign-in.** `[passwords]` in secrets holds one PBKDF2 hash per person; `make_login.py`
+  generates them. Nothing behind the sign-in renders for anyone who has not signed in, so
+  the repository and the app URL can both stay public while the roasts stay yours.
+
+Neither secret is in the repository, and the app tells you on the **Data** page which
+database it is actually using — so a misconfigured deploy announces itself instead of
+quietly losing data.
 
 ---
 
@@ -66,7 +84,8 @@ overlaid, with your reference roast in front.
 **Learning** — what the app has measured from your roasting, against what it assumed
 before it had your data, and how often each kind of advice has worked.
 
-**Data** — connect the folder, upload, load the demo, manage what is stored.
+**Data** — add roasts, see where they are stored and who is signed in, load the demo,
+manage what is kept.
 
 ---
 
@@ -139,14 +158,27 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-Everything is stored in one SQLite file, `roast_coach.db`, beside the app —
-`ROAST_COACH_DB` points it elsewhere. Three tables carry the data (`roasts`,
-`roast_curve`, `roast_notes`) and three carry the coaching (`recommendations`,
-`effects`, `rule_stats`).
+With nothing configured, everything is stored in one SQLite file, `roast_coach.db`,
+beside the app — `ROAST_COACH_DB` points it elsewhere, and `ROAST_COACH_DATABASE_URL`
+(or `[database] url` in secrets) sends it to Postgres instead. The same SQL runs on
+both. Three tables carry the data (`roasts`, `roast_curve`, `roast_notes`) and three
+carry the coaching (`recommendations`, `effects`, `rule_stats`); `sources` remembers
+which files have been read.
+
+A roast's own fields are stored as JSON in one column, and its whole curve as a single
+compressed row rather than fifteen hundred — which is the difference between an import
+taking a second and taking a minute over a network. `load_curve()` still hands back the
+per-sample table.
 
 ```bash
 python3 test_roast_coach.py
+
+# and against a real Postgres, which is what it runs on shared:
+ROAST_COACH_TEST_POSTGRES="postgresql://…" python3 test_roast_coach.py
 ```
+
+With a Postgres URL it also checks the thing that matters for a group: a second process
+imports roasts, and this one sees them without restarting.
 
 The test suite ends with the one that matters: the simulator builds a roasting history
 from effect sizes it never reveals, and the learning engine has to recover them from the
@@ -166,10 +198,12 @@ roastcoach/
   metrics.py                turning point, phases, rate of rise, pattern checks
   curves.py                 smoothed series for the charts
   charts.py                 the four figures
+  db.py                     Postgres or SQLite, same SQL either way
+  auth.py                   who is allowed in
+  uploader.py, frontend/    the Add roasts button and whole-folder sync
   fields.py, csv_import.py  reading RoasTime's two formats
   origin.py                 the coffee's country, read from the roast name
   demo_data.py              a simulated roasting history
-  folder.py, frontend/      browser folder access
 assets/                     the flame mark: logo-mark.svg (bare), icon.svg (tile),
                             logo-full.svg (lockup), icon-64/256.png
 ```
