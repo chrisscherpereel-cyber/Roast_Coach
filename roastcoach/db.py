@@ -191,6 +191,18 @@ def schema(name: str) -> list[str]:
                content_hash TEXT, imported_at TEXT, imported_by TEXT)""",
         "CREATE INDEX IF NOT EXISTS sources_hash ON sources (content_hash)",
 
+        # Everything RoasTime keeps beside a roast — the bean, the recipe, the
+        # machine, the profile it was roasted from. One row per record, stored as
+        # it arrived, so a RoasTime update that adds a field loses nothing.
+        """CREATE TABLE IF NOT EXISTS reference (
+               key TEXT PRIMARY KEY,
+               kind TEXT NOT NULL,
+               ref_id TEXT NOT NULL,
+               name TEXT,
+               updated_at TEXT,
+               data TEXT NOT NULL)""",
+        "CREATE INDEX IF NOT EXISTS reference_kind ON reference (kind)",
+
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)",
     ]
 

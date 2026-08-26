@@ -16,36 +16,77 @@ Runs entirely in the cloud. Nothing is installed on the machine that does the ro
 
 ## Getting your roasts in
 
-**Press Add roasts, pick the files.** In Chrome and Edge the dialog reopens in whatever
-folder you used last, so after the first visit this is: click, select all, done. Files
-already imported are skipped in the browser without being opened, so selecting the whole
-folder every time costs nothing — and a file that turns up under a new name is recognised
-by its contents, not added twice.
+**Choose folder…** on the Data page opens a file dialog. Pick the folder, and every roast
+file inside it goes in at once. Do that whenever you have roasted — anything already
+imported is skipped in the browser without being opened, so only new and changed roasts
+are actually read, and a file that reappears under another name is recognised by its
+contents rather than added twice.
 
-RoasTime keeps the originals here:
+### The one exception, and it is Chrome's
 
-| System | Folder |
-| --- | --- |
-| macOS | `~/Library/Application Support/roast-time/roasts` |
-| Windows | `%APPDATA%\roast-time\roasts` |
+RoasTime writes to `~/Library/Application Support/roast-time/roasts`, and **Chrome will
+not accept any folder inside your Library as a folder upload** — it answers *"this folder
+contains system files"*. That is Chrome's rule and no web app can override it. macOS also
+hides the Library, so it will not show up in the dialog until you go there directly.
 
-Picking **files** out of those folders works. Picking the **folder itself** does not:
-Chrome refuses to share anything inside your system Library, answering *"this folder
-contains system files"*. That is a rule about where the folder lives, not about your
-files, and it is why the button asks for files. On macOS the dialog can jump straight
-there — press **⌘⇧G** and paste the path, once.
+Three ways in, in order of least trouble. All three end up in the same place:
+
+1. **Choose files…** — in the dialog press **⌘⇧G**, paste the path, Return, then **⌘A** to
+   select every file and Open. Picking files is allowed where picking the folder is not.
+2. **Drag it** — in Finder press ⌘⇧G, paste the path, and drag the folder onto the box.
+   Dragging is not the picker and has no such rule. While you are there, drag the folder
+   into Finder's **sidebar** — one click away from then on.
+3. **Zip it** — right-click the folder in Finder, **Compress**, and upload the zip. A zip
+   is one ordinary file, so nothing objects to it.
+
+On Windows the folder is `%APPDATA%\roast-time\roasts` and **Choose folder…** takes it
+directly.
+
+### Doing none of that, ever again
+
+A browser tab cannot reach into your Library to copy or zip anything for you — it has no
+access to your disk until you hand it files. Something on **your Mac** has to do it, on a
+schedule. Two ways in `mac/`, both set up once:
+
+- **`mac/roast-sync.command`** — double-click. Copies your roasts to
+  `~/Documents/RoastCoach` and offers to keep doing it every fifteen minutes and at login.
+  After that **Choose folder…** → Documents → RoastCoach works forever, because that folder
+  is an ordinary one. Nothing to install.
+- **`mac/sync_to_database.py`** — removes the import step rather than easing it. Writes new
+  and changed roasts straight into the shared database, so they appear in the app on their
+  own, on every computer. `python3 mac/sync_to_database.py --install` and it runs itself.
+
+`mac/README.md` has both in full. Or do the copy by hand whenever you like:
+
+```bash
+mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\ Support/roast-time/roasts/. ~/Documents/RoastCoach/
+```
 
 Nothing is ever written back to RoasTime's folder. The app only reads.
 
-Under **Other ways in** there is also drag-and-drop (any browser, or a zip of the whole
-folder), whole-folder sync for folders Chrome will share, and a **demo roasting history**
-— three coffees dialled in over a few months — so you can see how it all works before
-connecting anything.
+### Everything else RoasTime keeps
 
-Both RoasTime formats are read: the per-roast JSON files, and the single-roast CSV
-export. Every roast is identified by **date and coffee**; the coffee is read from the
-roast name and you can correct it, along with origin, process, variety, weights, roast
-level, rating, cupping score and notes.
+A roast file is only part of the story. RoasTime stores the coffee, the recipe you roasted
+from, and the machine in sibling folders — `beans/`, `recipes/`, `officialRecipes/`,
+`containers/`, `userProfiles/` — and the roast points at them by id.
+
+All of it is synced and stored, exactly as it arrived, so a RoasTime update that adds a
+field loses nothing. Each roast then shows **origin, process, variety, farm, altitude,
+harvest, recipe name, machine and who roasted it** without anyone typing them, and the
+Roasts page carries the same readout RoasTime shows beside its graph: preheat, charge,
+turning point, yellowing, first crack, development with its temperature rise, end
+temperature, every rate-of-rise figure, yield and weight loss, the power and fan settings
+per phase, ambient, humidity and energy.
+
+Linking is done by trying the id fields RoasTime has actually used rather than assuming
+one name, and the app can say what matched — so a version that names things differently
+is a fixable observation rather than a silent blank.
+
+Both RoasTime formats are read: the per-roast JSON files, and the single-roast CSV export.
+Every roast is identified by **date and coffee**; the coffee is read from the roast name and
+you can correct it, along with origin, process, variety, weights, roast level, rating,
+cupping score and notes. There is also a **demo roasting history** so you can look around
+before importing anything.
 
 ---
 
@@ -59,13 +100,23 @@ both in about fifteen minutes**:
   Supabase project does it — and every computer signed in sees the same roasts. This also
   fixes something easy to miss: Streamlit Community Cloud wipes its own disk on every
   restart, so without this, roasts imported today are gone tomorrow.
-- **A sign-in.** `[passwords]` in secrets holds one PBKDF2 hash per person; `make_login.py`
-  generates them. Nothing behind the sign-in renders for anyone who has not signed in, so
-  the repository and the app URL can both stay public while the roasts stay yours.
+- **A sign-in.** `[passwords]` in secrets holds one PBKDF2 hash per person. With no accounts
+  set up, the app makes the first one for you: it asks for a name and password and prints
+  the two lines to paste into secrets. `password_tool.html` in any browser and
+  `make_login.py` in a terminal do the same job. Nothing behind the sign-in renders for
+  anyone who has not signed in, so the repository and the app URL can both stay public while
+  the roasts stay yours.
 
 Neither secret is in the repository, and the app tells you on the **Data** page which
 database it is actually using — so a misconfigured deploy announces itself instead of
 quietly losing data.
+
+Roasts do not only arrive through the browser: the Mac sync writes straight into the
+database, and so does anybody else signed in. Every page checks a one-query signature of
+what is stored — how many roasts, when the last one landed — and reads the table again by
+itself when that moves. So a roast finished on the Bullet turns up in an app that is
+already open, without a restart and without pressing anything. **Re-read** on the Data
+page forces it, if you want to watch it happen.
 
 ---
 
@@ -84,8 +135,8 @@ overlaid, with your reference roast in front.
 **Learning** — what the app has measured from your roasting, against what it assumed
 before it had your data, and how often each kind of advice has worked.
 
-**Data** — add roasts, see where they are stored and who is signed in, load the demo,
-manage what is kept.
+**Data** — folder upload, where the roasts are stored, who is signed in, the demo, and
+what to delete.
 
 ---
 
@@ -170,6 +221,11 @@ compressed row rather than fifteen hundred — which is the difference between a
 taking a second and taking a minute over a network. `load_curve()` still hands back the
 per-sample table.
 
+The bean, recipe and machine attached to each roast are joined in one pass over the whole
+table rather than a query per roast: five hundred roasts asking one at a time is fifteen
+hundred round trips — 7.8 s against a database on the same machine, and far worse across
+the Atlantic. Read together it is 0.2 s.
+
 ```bash
 python3 test_roast_coach.py
 
@@ -199,11 +255,15 @@ roastcoach/
   curves.py                 smoothed series for the charts
   charts.py                 the four figures
   db.py                     Postgres or SQLite, same SQL either way
+  library.py                beans, recipes, machines — and joining them to roasts
   auth.py                   who is allowed in
-  uploader.py, frontend/    the Add roasts button and whole-folder sync
+  uploader.py, frontend/    the drop box, and an optional watched folder
   fields.py, csv_import.py  reading RoasTime's two formats
   origin.py                 the coffee's country, read from the roast name
   demo_data.py              a simulated roasting history
+password_tool.html          makes account lines for secrets, entirely in the browser
+mac/                        Mac-side sync: a folder copy, or straight to the database
+SETUP.md                    the shared-database and sign-in walkthrough
 assets/                     the flame mark: logo-mark.svg (bare), icon.svg (tile),
                             logo-full.svg (lockup), icon-64/256.png
 ```

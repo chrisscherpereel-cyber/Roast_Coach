@@ -1,0 +1,397 @@
+<title>Roast Coach Database Setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Newsreader:ital,opsz,wght@0,6..72,300;0,6..72,400;1,6..72,300&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root {
+  --paper: #F6F2EE;
+  --card: #FFFFFF;
+  --ink: #1F1712;
+  --ink-soft: #6B5C51;
+  --ink-faint: #A6968A;
+  --rule: #E3DAD1;
+  --field: #FBF8F5;
+  --ember: #C2521F;
+  --ember-soft: #FBEDE5;
+  --good: #2E6A4A;
+  --good-soft: #E7F2EC;
+  --done: #EFEAE4;
+  --shadow: 0 1px 2px rgba(31,23,18,.05), 0 8px 24px -14px rgba(31,23,18,.20);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #12100E; --card: #1C1815; --ink: #F2EAE3; --ink-soft: #A6968A;
+    --ink-faint: #77685D; --rule: #2C2621; --field: #171310; --ember: #F0803F;
+    --ember-soft: #2A1A11; --good: #7FC5A0; --good-soft: #16241C; --done: #191512;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.8);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #12100E; --card: #1C1815; --ink: #F2EAE3; --ink-soft: #A6968A;
+  --ink-faint: #77685D; --rule: #2C2621; --field: #171310; --ember: #F0803F;
+  --ember-soft: #2A1A11; --good: #7FC5A0; --good-soft: #16241C; --done: #191512;
+  --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -16px rgba(0,0,0,.8);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; padding: 0 22px 90px; background: var(--paper); color: var(--ink);
+  font-family: Newsreader, Georgia, serif; font-size: 17.5px; line-height: 1.62;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 720px; margin: 0 auto; }
+
+header { padding: 58px 0 8px; }
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11px; font-weight: 500;
+  letter-spacing: .17em; text-transform: uppercase; color: var(--ink-faint); margin: 0 0 14px;
+}
+h1 {
+  font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700;
+  font-size: clamp(31px, 5.4vw, 46px); line-height: 1.03; letter-spacing: -.027em;
+  margin: 0 0 16px; text-wrap: balance;
+}
+.lede { color: var(--ink-soft); font-size: 19px; margin: 0 0 8px; }
+.lede b { color: var(--ink); font-weight: 400; }
+
+/* how the pieces fit ------------------------------------------------------ */
+.pieces {
+  display: flex; align-items: stretch; gap: 10px; margin: 30px 0 8px; flex-wrap: wrap;
+}
+.piece {
+  flex: 1 1 170px; background: var(--card); border: 1px solid var(--rule);
+  border-radius: 12px; padding: 15px 16px; box-shadow: var(--shadow);
+}
+.piece .what {
+  font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700;
+  font-size: 15px; margin-bottom: 3px;
+}
+.piece .does { font-size: 14.5px; color: var(--ink-soft); line-height: 1.45; }
+.arrow {
+  align-self: center; color: var(--ember); font-size: 20px; flex: 0 0 auto;
+  font-family: "Bricolage Grotesque", sans-serif;
+}
+@media (max-width: 620px) { .arrow { transform: rotate(90deg); margin: -2px auto; } }
+.pieces-note { color: var(--ink-faint); font-size: 15px; margin: 8px 0 34px; }
+
+/* steps ------------------------------------------------------------------- */
+.step {
+  background: var(--card); border: 1px solid var(--rule); border-radius: 15px;
+  padding: 22px 24px 24px; box-shadow: var(--shadow); margin-bottom: 18px;
+  transition: background .2s, opacity .2s;
+}
+.step.done { background: var(--done); }
+.step.done .body { opacity: .5; }
+.step-head { display: flex; gap: 14px; align-items: flex-start; }
+.tick {
+  flex: 0 0 auto; width: 30px; height: 30px; border-radius: 99px; cursor: pointer;
+  border: 2px solid var(--rule); background: var(--field); color: transparent;
+  font-size: 15px; line-height: 1; display: grid; place-items: center; padding: 0;
+  font-family: system-ui; transition: background .15s, border-color .15s, color .15s;
+  margin-top: 2px;
+}
+.tick:hover { border-color: var(--ember); }
+.tick:focus-visible { outline: 2px solid var(--ember); outline-offset: 2px; }
+.step.done .tick { background: var(--good); border-color: var(--good); color: #fff; }
+h2 {
+  font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 700;
+  font-size: 21px; letter-spacing: -.018em; margin: 0; line-height: 1.25;
+}
+h2 .num {
+  font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 500;
+  color: var(--ember); letter-spacing: .06em; display: block; margin-bottom: 3px;
+}
+.body { margin-top: 12px; padding-left: 44px; }
+.body > :first-child { margin-top: 0; }
+.body p { margin: 0 0 12px; }
+.body ol, .body ul { margin: 0 0 12px; padding-left: 20px; }
+.body li { margin-bottom: 7px; }
+.body li::marker { color: var(--ink-faint); }
+
+code {
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 14px;
+  background: var(--ember-soft); color: var(--ember); padding: 1.5px 5px; border-radius: 4px;
+}
+pre {
+  background: var(--field); border: 1px solid var(--rule); border-radius: 10px;
+  padding: 13px 15px; overflow-x: auto; margin: 0 0 12px;
+  font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px;
+  line-height: 1.65; color: var(--ink); white-space: pre; user-select: all;
+}
+pre code { background: none; color: inherit; padding: 0; font-size: inherit; }
+
+.watch {
+  display: flex; gap: 11px; align-items: flex-start; background: var(--ember-soft);
+  border-radius: 10px; padding: 13px 15px; font-size: 15.5px; margin: 0 0 12px;
+}
+.watch .mark { color: var(--ember); font-weight: 700; flex: none; }
+.watch b { font-weight: 600; }
+.fine { color: var(--ink-faint); font-size: 15px; }
+
+h3 {
+  font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 500;
+  font-size: 12px; letter-spacing: .15em; text-transform: uppercase;
+  color: var(--ink-faint); margin: 40px 0 16px;
+}
+table { width: 100%; border-collapse: collapse; font-size: 16px; margin-bottom: 10px; }
+th {
+  text-align: left; font-family: "Bricolage Grotesque", sans-serif; font-weight: 600;
+  font-size: 13.5px; color: var(--ink-faint); padding: 0 12px 8px 0;
+  border-bottom: 1px solid var(--rule);
+}
+td { padding: 11px 12px 11px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td:first-child { width: 42%; color: var(--ink); }
+td:last-child { color: var(--ink-soft); }
+
+footer {
+  margin-top: 40px; padding-top: 22px; border-top: 1px solid var(--rule);
+  color: var(--ink-soft); font-size: 16px;
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+@media (max-width: 560px) {
+  .body { padding-left: 0; }
+  body { padding: 0 16px 70px; }
+}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Roast Coach</p>
+    <h1>Setting up the database</h1>
+    <p class="lede">Half an hour, once, and then roasts arrive on their own — on every
+      computer, without anybody uploading anything. <b>Nothing here costs money.</b></p>
+  </header>
+
+  <div class="pieces">
+    <div class="piece">
+      <div class="what">Your Mac</div>
+      <div class="does">RoasTime saves each roast. A small helper notices and sends it on.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="piece">
+      <div class="what">The database</div>
+      <div class="does">A free filing cabinet on the internet. It just holds the roasts.</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="piece">
+      <div class="what">Roast Coach</div>
+      <div class="does">Reads the cabinet and shows you what to change next.</div>
+    </div>
+  </div>
+  <p class="pieces-note">The three pieces never talk to each other any other way. That is
+    what makes it work from any computer, and what makes the browser's rules about folders
+    stop mattering.</p>
+
+  <div class="step" data-step="1">
+    <div class="step-head">
+      <button class="tick" aria-label="Mark step 1 done">✓</button>
+      <h2><span class="num">STEP ONE</span>Make the free database</h2>
+    </div>
+    <div class="body">
+      <ol>
+        <li>Go to <b>supabase.com</b> and sign up. A Google or GitHub account works.</li>
+        <li>Press <b>New project</b>.</li>
+        <li>Give it any name — <em>Roast Coach</em> is fine.</li>
+        <li>It asks you to make up a <b>database password</b>. Make one up, and
+          <b>save it somewhere</b> — a password manager, a note. You will need it in a
+          minute and Supabase will not show it to you again.</li>
+        <li>Choose the region closest to you.</li>
+        <li>Press create, and wait a minute or two while it builds.</li>
+      </ol>
+      <div class="watch">
+        <span class="mark">!</span>
+        <div>Use letters and numbers in that password. If it contains
+          <code>@</code> <code>:</code> <code>/</code> or <code>#</code>, it breaks the
+          address you paste later.</div>
+      </div>
+      <p class="fine">You never have to open Supabase again after the next step. Roast Coach
+        builds its own tables the first time it connects — there is nothing to set up inside
+        the database itself.</p>
+    </div>
+  </div>
+
+  <div class="step" data-step="2">
+    <div class="step-head">
+      <button class="tick" aria-label="Mark step 2 done">✓</button>
+      <h2><span class="num">STEP TWO</span>Copy the address</h2>
+    </div>
+    <div class="body">
+      <p>This is the one line that tells everything else where the cabinet is.</p>
+      <ol>
+        <li>In your new project, press <b>Connect</b> at the top of the page.</li>
+        <li>A panel opens with several options. Find <b>Session pooler</b>.</li>
+        <li>Copy the line underneath it. It looks like this:</li>
+      </ol>
+      <pre><code>postgresql://postgres.abcdefghijk:[YOUR-PASSWORD]@aws-1-us-east-2.pooler.supabase.com:5432/postgres</code></pre>
+      <ol start="4">
+        <li>Paste it into a note, and replace <code>[YOUR-PASSWORD]</code> — square brackets
+          and all — with the password you made up in step one.</li>
+      </ol>
+      <div class="watch">
+        <span class="mark">!</span>
+        <div><b>Take Session pooler, not Direct connection.</b> They look almost identical
+          and only one of them works. The direct one uses a kind of internet address that
+          Streamlit's servers cannot reach, and the error it gives you —
+          <em>"cannot assign requested address"</em> — tells you nothing about why. If you
+          ever see that, you took the wrong one.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="step" data-step="3">
+    <div class="step-head">
+      <button class="tick" aria-label="Mark step 3 done">✓</button>
+      <h2><span class="num">STEP THREE</span>Tell the app</h2>
+    </div>
+    <div class="body">
+      <p>Roast Coach keeps this address in a private settings box that is never part of the
+        public code, so your app and your repository can both stay public while your roasts
+        stay yours.</p>
+      <ol>
+        <li>Go to <b>share.streamlit.io</b> and find your app.</li>
+        <li>Press the <b>⋮</b> beside it → <b>Settings</b> → <b>Secrets</b>.</li>
+        <li>Type this into the box, with your own address on the second line:</li>
+      </ol>
+      <pre><code>[database]
+url = "postgresql://postgres.abcdefghijk:mypassword@aws-1-us-east-2.pooler.supabase.com:5432/postgres"</code></pre>
+      <ol start="4">
+        <li>Keep the quotation marks. Press <b>Save</b>. The app restarts by itself.</li>
+      </ol>
+      <p>Open the app and go to the <b>Data</b> page. Near the bottom it says where it is
+        keeping things. It should now say <b>Postgres</b>, not SQLite. If it still says
+        SQLite, the section heading is misspelled — it has to be exactly
+        <code>[database]</code>.</p>
+    </div>
+  </div>
+
+  <div class="step" data-step="4">
+    <div class="step-head">
+      <button class="tick" aria-label="Mark step 4 done">✓</button>
+      <h2><span class="num">STEP FOUR</span>Make sign-ins</h2>
+    </div>
+    <div class="body">
+      <p>Your app has a public web address, so it needs a lock on the door. Open
+        <b>password_tool.html</b> from the download — just double-click it — and add a name
+        and password for each person. It hands you a block of text to paste into the same
+        Secrets box, underneath the database part.</p>
+      <p>The passwords are scrambled in your own browser before they are written down, and
+        nothing is sent anywhere. What ends up in Secrets cannot be turned back into a
+        password.</p>
+      <p class="fine">Adding somebody later means pasting the whole block again with their
+        line included — so keep a copy in your password manager.</p>
+    </div>
+  </div>
+
+  <div class="step" data-step="5">
+    <div class="step-head">
+      <button class="tick" aria-label="Mark step 5 done">✓</button>
+      <h2><span class="num">STEP FIVE</span>Turn on automatic syncing</h2>
+    </div>
+    <div class="body">
+      <p>This is the part that means you never upload anything again. It runs on the Mac
+        that has RoasTime on it, and takes about a minute.</p>
+      <p><b>Do not double-click it</b> — macOS blocks files that came from a download, and
+        the old right-click trick no longer works. Use Terminal instead, which has no such
+        problem:</p>
+      <ol>
+        <li>Open <b>Terminal</b> — ⌘-Space, type <em>Terminal</em>, press Return.</li>
+        <li>Type <code>bash</code> followed by a <b>space</b>.</li>
+        <li>Open the download's <b>mac</b> folder in Finder and <b>drag setup.command into
+          the Terminal window</b>. It fills in the path for you.</li>
+        <li>Press <b>Return</b>.</li>
+      </ol>
+      <p>It asks you one question — paste the same address from step two — and then does the
+        rest: checks it can see your roasts, installs what it needs, sends everything across
+        once so you can see it worked, and offers to keep doing that every fifteen minutes
+        and whenever you log in.</p>
+      <p>Say yes, and that is the end of it. Roast on the Bullet, and the roast turns up in
+        Roast Coach by itself, for everybody.</p>
+      <div class="watch">
+        <span class="mark">!</span>
+        <div><b>Why not double-click?</b> Apple removed the right-click → Open bypass in
+          macOS Sequoia, so a downloaded script simply refuses to run and there is no
+          obvious way through. Terminal is not affected: Gatekeeper stops the Finder from
+          <em>launching</em> the file, but you are handing it to the shell yourself.</div>
+      </div>
+      <p class="fine">If you would rather double-click anyway: try it, let it be blocked,
+        then go to <b>System Settings → Privacy &amp; Security</b>, scroll down to Security,
+        and press <b>Open Anyway</b> beside the message about setup.command. The message
+        only appears for a short while after the attempt.</p>
+      <p class="fine">Only one Mac needs to do this — whichever one you roast from. It keeps
+        everybody's view current.</p>
+    </div>
+  </div>
+
+  <h3>How to tell it worked</h3>
+  <table>
+    <thead><tr><th>Where</th><th>What you should see</th></tr></thead>
+    <tbody>
+      <tr><td>The app's <b>Data</b> page</td>
+          <td>“Postgres — aws-1-…supabase.com”, in green, under <em>Where this is stored</em></td></tr>
+      <tr><td>The app's roast count</td>
+          <td>Goes up on its own within fifteen minutes of a roast, with nobody uploading</td></tr>
+      <tr><td>Another computer</td>
+          <td>Signs in and sees exactly the same roasts</td></tr>
+      <tr><td><code>~/Library/Logs/roast-coach-sync.log</code></td>
+          <td>A line for each check: <em>“1 new → Postgres”</em>, or <em>“nothing new”</em></td></tr>
+    </tbody>
+  </table>
+
+  <h3>If something goes wrong</h3>
+  <table>
+    <thead><tr><th>What it says</th><th>What it means</th></tr></thead>
+    <tbody>
+      <tr><td>cannot assign requested address</td>
+          <td>You took the Direct connection. Go back and take the <b>Session pooler</b> one.</td></tr>
+      <tr><td>password authentication failed</td>
+          <td>Either <code>[YOUR-PASSWORD]</code> is still sitting in the line, or the
+              password has a character like <code>@</code> in it that breaks the address.</td></tr>
+      <tr><td>The Data page still says SQLite</td>
+          <td>The Secrets box is missing the <code>[database]</code> heading, or it is spelled
+              differently.</td></tr>
+      <tr><td>No accounts are set up yet</td>
+          <td>The <code>[passwords]</code> part has not been pasted in yet. Step four.</td></tr>
+      <tr><td>macOS will not open setup.command</td>
+          <td>Expected for a downloaded file, and right-click → Open no longer helps. Open
+              Terminal, type <code>bash</code> and a space, drag the file in, press Return.</td></tr>
+      <tr><td>The roasts went across but the schedule would not start</td>
+          <td>Your roasts <em>are</em> in the database — only the repeating failed. The
+              script now says what macOS objected to, and falls back to the older scheduler
+              by itself.</td></tr>
+      <tr><td>Everything is slow first thing</td>
+          <td>Normal. The free database goes to sleep when unused and takes a few seconds to
+              wake up.</td></tr>
+    </tbody>
+  </table>
+
+  <footer>
+    <p><b>What it costs:</b> nothing. Supabase gives away 500 MB, which at roughly 20 KB a
+      roast is tens of thousands of them, and Streamlit is free for public apps. Neither
+      asks for a card. The free database pauses after a week of nobody opening it, and wakes
+      up on its own the next time you do.</p>
+    <p>Full technical details, including moving roasts you already have, are in
+      <b>SETUP.md</b> in the download.</p>
+  </footer>
+</div>
+
+<script>
+// A tick per step, kept in this browser only. Nothing here is sent anywhere.
+const KEY = "roast-coach-db-setup";
+let done = {};
+try { done = JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (error) { done = {}; }
+
+document.querySelectorAll(".step").forEach((step) => {
+  const which = step.dataset.step;
+  const tick = step.querySelector(".tick");
+  const paint = () => {
+    step.classList.toggle("done", !!done[which]);
+    tick.setAttribute("aria-pressed", String(!!done[which]));
+  };
+  tick.addEventListener("click", () => {
+    done[which] = !done[which];
+    try { localStorage.setItem(KEY, JSON.stringify(done)); } catch (error) { /* fine */ }
+    paint();
+  });
+  paint();
+});
+</script>

@@ -12,7 +12,7 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from roastcoach import auth, charts, coach, db, demo_data, learning, store
+from roastcoach import auth, charts, coach, db, demo_data, learning, library, store
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS
 from roastcoach.naming import label_for
@@ -29,8 +29,19 @@ st.set_page_config(page_title="Roast Coach", page_icon=str(ASSETS / "icon-64.png
 
 
 @st.cache_data(show_spinner=False)
-def load(token: int) -> pd.DataFrame:
+def load(token) -> pd.DataFrame:
     return store.load_roasts()
+
+
+def token():
+    """What the cached table was read at.
+
+    Roasts arrive from three directions: this browser, somebody else's, and the
+    Mac sync writing straight into the database with no browser at all. Only the
+    first of those can clear a cache. So the key is a one-query signature of what
+    is actually stored — when that moves, the table is read again by itself.
+    """
+    return (store.fingerprint(), st.session_state.get("data_token", 0))
 
 
 def refresh():
@@ -40,11 +51,11 @@ def refresh():
 
 
 def roasts() -> pd.DataFrame:
-    return load(st.session_state.get("data_token", 0))
+    return load(token())
 
 
 @st.cache_data(show_spinner=False, max_entries=128)
-def samples_for(roast_id: str, token: int):
+def samples_for(roast_id: str, token):
     roast = store.roast_dict(roast_id)
     if not roast:
         return pd.DataFrame(), []
@@ -52,7 +63,7 @@ def samples_for(roast_id: str, token: int):
 
 
 def curve_of(roast_id: str):
-    return samples_for(roast_id, st.session_state.get("data_token", 0))
+    return samples_for(roast_id, token())
 
 
 def theme() -> str:
@@ -68,9 +79,40 @@ def number(value, suffix="", decimals=1, dash="—"):
     return f"{float(value):.{decimals}f}{suffix}"
 
 
+COMPANION_HINTS = {
+    "bean": ("origin", "process", "varietal", "beanName"),
+    "recipe": ("recipeName", "steps", "targetWeight", "recipeSteps"),
+}
+
+
+def sort_out(files: list[dict]) -> tuple[list[dict], dict]:
+    """Roast files in one pile, bean and recipe files in the other.
+
+    A whole RoasTime folder can be dropped in at once, so anything that is not a
+    roast is offered to the reference store rather than counted as a failure.
+    """
+    roast_files, companions = [], {}
+    for item in files:
+        text = item.get("text") or ""
+        head = text[:4000]
+        if any(hint in head for hint in ("beanTemperature", "drumTemperature",
+                                         "beanDerivative", "Timeline")):
+            roast_files.append(item)
+            continue
+        for kind, hints in COMPANION_HINTS.items():
+            if any(hint in head for hint in hints):
+                companions.setdefault(kind, []).append(item)
+                break
+    return roast_files, companions
+
+
 def import_files(files: list[dict]) -> dict:
     """Bring roasts in, then re-learn and re-grade — the whole cycle."""
+    files, companions = sort_out(files)
+    for kind, records in companions.items():
+        library.add_records(kind, records)
     report = store.add_roasts(files)
+    report["companions"] = sum(len(v) for v in companions.values())
     if report["added"] or report["updated"]:
         refresh()
         frame = roasts()
@@ -129,6 +171,25 @@ def account_strip(user: str):
 
 
 def empty_state(message: str):
+    # A page with nothing on it while the database is full of roasts is the most
+    # confusing thing the app can do. Count the rows before saying there are none.
+    try:
+        stored = store.fingerprint()
+        held = int(stored[0]) if stored and stored[0] else 0
+    except Exception:
+        held = 0
+
+    if held:
+        brand_header("Nothing to work with yet")
+        st.warning(
+            f"The database holds **{held} roast(s)**, but this page could not read them. "
+            "That is a bug rather than a missing import — press **Read them again** and "
+            "tell me what happens.")
+        if st.button("Read them again", type="primary"):
+            refresh()
+            st.rerun()
+        st.stop()
+
     brand_header("Nothing to work with yet")
     st.info(message + "  \n\nGo to **Data** in the sidebar to connect your roasts, "
             "or load the demo history to look around first.")
@@ -325,8 +386,126 @@ def page_roasts():
     roast_detail(selected, frame)
 
 
+PHASE_SHORT = {"Charge": "charge", "Drying": "dry", "Maillard": "Maillard",
+               "Development": "dev"}
+
+
+def phase_bar(row):
+    """Drying / Maillard / Development, as RoasTime shows them."""
+    total = float(row.get("totalRoastMinutes") or 0)
+    yellow = float(row.get("yellowPointTime") or 0)
+    crack = float(row.get("firstCrackTime") or 0)
+    if not (total > 0 and 0 < yellow < crack < total):
+        return
+
+    spans = [("Drying", yellow, "#2E7D6B"), ("Maillard", crack - yellow, "#C58A2E"),
+             ("Development", total - crack, "#C2521F")]
+    cells = []
+    for name, minutes, colour in spans:
+        share = minutes / total * 100
+        cells.append(
+            f'<div style="flex:{max(share, 6)};background:{colour};color:#fff;'
+            f'padding:8px 12px;border-radius:7px">'
+            f'<div style="font-size:.72rem;letter-spacing:.09em;text-transform:uppercase;'
+            f'opacity:.85">{name}</div>'
+            f'<div style="font-weight:650;font-size:.95rem">'
+            f'{int(minutes)}:{int(round((minutes % 1) * 60)):02d} · {share:.1f}%</div></div>')
+    st.markdown(f'<div style="display:flex;gap:5px;margin:2px 0 16px">{"".join(cells)}</div>',
+                unsafe_allow_html=True)
+
+
+def readout(row):
+    """The numbers RoasTime puts beside the graph, in the same order."""
+    def clock(minutes):
+        if minutes is None or pd.isna(minutes):
+            return "—"
+        minutes = float(minutes)
+        return f"{int(minutes)}:{int(round((minutes % 1) * 60)):02d}"
+
+    crack, total = row.get("firstCrackTime"), row.get("totalRoastMinutes")
+    development = (total - crack) if pd.notna(crack) and pd.notna(total) else float("nan")
+    share = (development / total * 100) if pd.notna(development) and total else float("nan")
+    rise = row.get("tempRiseAfterFirstCrack")
+    green, roasted = row.get("greenWeight"), row.get("weightRoasted")
+    loss = row.get("weightLossPercent")
+
+    def block(title, pairs):
+        rows = "".join(
+            f'<div style="display:flex;justify-content:space-between;gap:14px;padding:3px 0">'
+            f'<span style="opacity:.62">{label}</span>'
+            f'<span style="font-variant-numeric:tabular-nums;font-weight:600">{value}</span></div>'
+            for label, value in pairs if value not in (None, "—", "nan"))
+        if not rows:
+            return ""
+        return (f'<div style="margin-bottom:14px">'
+                f'<div style="font-size:.7rem;letter-spacing:.13em;text-transform:uppercase;'
+                f'opacity:.5;margin-bottom:5px">{title}</div>{rows}</div>')
+
+    html = "".join([
+        block("Roast", [
+            ("Preheat", number(row.get("preheatTemperature"), " °C", 0)),
+            ("Charge", number(row.get("drumChargeTemperature"), " °C", 0)),
+            ("Turning point", f'{clock(row.get("turningPointTime"))} · '
+                              f'{number(row.get("ibtsTurningPointTemp"), " °C", 1)}'),
+            ("Yellowing", f'{clock(row.get("yellowPointTime"))} · '
+                          f'{number(row.get("drumTemperatureYellowingStart"), " °C", 1)}'),
+            ("First crack", f'{clock(crack)} · '
+                            f'{number(row.get("drumTemperatureFirstCrackStart"), " °C", 1)}'),
+            ("Development", f'{clock(development)} · {number(share, "%")}'
+                            + (f' · +{float(rise):.1f} °C' if pd.notna(rise) else "")),
+            ("Total time", clock(total)),
+            ("End temp", number(row.get("drumDropTemperature"), " °C", 1)),
+        ]),
+        block("Rate of rise", [
+            ("Peak (bean)", number(row.get("peakROR"), " °C/min")),
+            ("Peak (IBTS)", number(row.get("peakIbtsROR"), " °C/min")),
+            ("At first crack", number(row.get("rorAtFirstCrack"), " °C/min")),
+            ("At drop", number(row.get("rorAtDrop"), " °C/min")),
+            ("Drying average", number(row.get("avgRoRDrying"), " °C/min")),
+            ("Maillard average", number(row.get("avgRoRMaillard"), " °C/min")),
+            ("Development average", number(row.get("avgRoRDevelopment"), " °C/min")),
+        ]),
+        block("Yield", [
+            ("Green", number(green, " g", 0)),
+            ("Roasted", number(roasted, " g", 0)),
+            ("Weight loss", number(loss, "%")),
+        ]),
+        block("Settings", [
+            ("Power", " · ".join(
+                f"{short} {number(row.get('power' + phase), '', 1)}"
+                for phase, short in PHASE_SHORT.items()
+                if pd.notna(row.get("power" + phase)))),
+            ("Fan", " · ".join(
+                f"{short} {number(row.get('fan' + phase), '', 1)}"
+                for phase, short in PHASE_SHORT.items()
+                if pd.notna(row.get("fan" + phase)))),
+            ("Changes", f"{int(row.get('powerChanges') or 0)} power, "
+                        f"{int(row.get('fanChanges') or 0)} fan"),
+        ]),
+        block("Environment", [
+            ("Ambient", number(row.get("ambient"), " °C")),
+            ("Humidity", number(row.get("humidity"), "%", 0)),
+            ("Energy", number(row.get("energy"), " kWh", 2)),
+        ]),
+        block("From RoasTime", [
+            ("Recipe", text_of(row.get("recipe_name")) or "—"),
+            ("Machine", text_of(row.get("machine_name")) or "—"),
+            ("Roasted by", text_of(row.get("roasted_by")) or "—"),
+            ("Roast number", text_of(row.get("roastNumber")) or "—"),
+            ("Origin", text_of(row.get("origin")) or "—"),
+            ("Process", text_of(row.get("process")) or "—"),
+            ("Variety", text_of(row.get("variety")) or "—"),
+            ("Altitude", text_of(row.get("altitude")) or "—"),
+            ("Harvest", text_of(row.get("harvest")) or "—"),
+        ]),
+    ])
+    st.markdown(f'<div style="font-size:.88rem;line-height:1.5">{html}</div>',
+                unsafe_allow_html=True)
+
+
 def roast_detail(row, frame):
     st.markdown(f"### {row['label']}")
+    phase_bar(row)
     samples, events = curve_of(row["uid"])
 
     left, right = st.columns([3, 2])
@@ -358,6 +537,9 @@ def roast_detail(row, frame):
                 st.warning(f"**{FLAG_LABELS[flag]}** — {FLAG_EXPLANATIONS[flag]}", icon="⚠️")
 
     with right:
+        with st.expander("Every number RoasTime records", expanded=True):
+            readout(row)
+
         st.markdown("#### About this roast")
         with st.form(f"notes_{row['uid']}"):
             coffee = st.text_input("Coffee", value=text_of(row.get("coffee")))
@@ -530,144 +712,200 @@ def page_learning():
         st.caption("Advice that keeps missing is shown with lower confidence next time.")
 
 
+def _report_line(report: dict) -> str:
+    """What an import actually did, in one sentence."""
+    parts = []
+    if report["added"]:
+        parts.append(f"{report['added']} new roast" + ("s" if report["added"] != 1 else ""))
+    if report["updated"]:
+        parts.append(f"{report['updated']} updated")
+    if report["skipped"]:
+        parts.append(f"{report['skipped']} already here")
+    if report.get("companions"):
+        parts.append(f"{report['companions']} bean/recipe file(s)")
+    return "Imported " + (", ".join(parts) if parts else "nothing new")
+
+
 def page_data():
     brand_header("Where your roasts come from")
-    info = store.summary()
+    frame = roasts()
+    info = store.summary(frame=frame)
 
-    columns = st.columns(4)
+    columns = st.columns([1, 1, 1, 1, 1])
     columns[0].metric("Roasts", info["roasts"])
     columns[1].metric("Coffees", info["coffees"])
     columns[2].metric("Samples stored", f"{info['samples']:,}")
     columns[3].metric("Last import", (info["imported_at"] or "—")[:16].replace("T", " "))
+    with columns[4]:
+        st.write("")
+        if st.button("Re-read", help="Read the database again, in case something else "
+                                     "wrote to it just now."):
+            refresh()
+            st.rerun()
 
-    # ---- the one button ---------------------------------------------------
+    if info["roasts"] and len(frame) != info["roasts"]:
+        st.warning(f"{info['roasts']} roasts are stored but only {len(frame)} could be "
+                   "read. Press **Re-read**; if the numbers still differ, that is a bug.")
+
+    from roastcoach.uploader import add_roasts_button, folder_watcher
+
     st.markdown("### Add roasts")
     st.markdown(
-        "Pick the roast files you want. In Chrome and Edge the dialog reopens in whatever "
-        "folder you used last, so after the first time this is: click, select all, done. "
-        "**Files you have already imported are left alone** — only new and changed ones are "
-        "read, so selecting the whole folder every time costs nothing."
+        "**Choose folder…** opens a file dialog, you pick the folder, and every roast "
+        "inside it goes in at once. Do that whenever you have roasted — anything already "
+        "imported is skipped in the browser without being opened, so only new and changed "
+        "roasts are actually read."
     )
 
-    from roastcoach.uploader import add_roasts_button, folder_picker
-
-    # Carried across the rerun that updates the counts above.
-    just_imported = bool(st.session_state.pop("_import_done", None))
-    if just_imported:
+    # Carried across the rerun that refreshes the counts above.
+    if st.session_state.pop("_import_done", None):
         st.success(st.session_state.pop("_import_message", "Imported."))
 
-    result = add_roasts_button(known=store.known_sources(), key="add_roasts")
+    picked = add_roasts_button(known=store.known_sources(), key="add_roasts")
 
-    # A component keeps its last value across reruns, so without this guard the
-    # same batch would be imported again on every rerun. Each message the
-    # browser sends carries a number; each number is acted on once.
-    fresh = (isinstance(result, dict)
-             and result.get("seq") != st.session_state.get("_upload_seq"))
+    # A component keeps its last value across reruns, so without this guard the same
+    # batch would import again on every rerun. Each message carries a number; each
+    # number is acted on once.
+    fresh = (isinstance(picked, dict)
+             and picked.get("seq") != st.session_state.get("_upload_seq"))
     if fresh:
-        st.session_state["_upload_seq"] = result.get("seq")
+        st.session_state["_upload_seq"] = picked.get("seq")
 
-    if fresh and result.get("action") == "files" and result.get("files"):
-        report = import_files(result["files"])
-        message = f"Imported {report['added']} new roast(s)"
-        if report["updated"]:
-            message += f", updated {report['updated']}"
-        if report["skipped"]:
-            message += f", skipped {report['skipped']} already here"
+    if fresh and picked.get("action") == "files" and picked.get("files"):
+        report = import_files(picked["files"])
+        message = _report_line(report)
         for problem in report["problems"][:5]:
             st.caption(problem)
-        if result.get("notRoasts"):
-            st.caption("Not roast files, ignored: " + ", ".join(result["notRoasts"][:6]))
-        if result.get("remaining"):
-            st.success(message + f" — {result['remaining']} still to read")
+        if picked.get("remaining"):
+            st.success(message + f" — {picked['remaining']} still to read")
             st.rerun()
         st.session_state["_import_message"] = message
         st.session_state["_import_done"] = True
         st.rerun()
-    elif fresh and result.get("action") == "none" and result.get("chosen") and not just_imported:
-        st.info(f"All {result['chosen']} of those are already imported. Nothing to do.")
+    elif fresh and picked.get("action") == "none" and picked.get("chosen"):
+        st.info(f"All {picked['chosen']} of those are already imported. Nothing to do.")
+    elif fresh and picked.get("action") == "folder-empty":
+        st.warning(
+            "**Chrome would not upload that folder.** If it said the folder *contains "
+            "system files*, that is its rule about anything inside your Mac's Library — "
+            "it cannot be overridden from inside a web app. Any of the three below will "
+            "get the same files in.",
+            icon=":material/block:")
 
-    with st.expander("Where RoasTime keeps your roasts"):
-        st.markdown(
-            """
-| System | Folder |
-| --- | --- |
-| macOS | `~/Library/Application Support/roast-time/roasts` |
-| Windows | `%APPDATA%\\roast-time\\roasts` |
+    st.markdown("#### RoasTime's folder is inside your Library")
+    st.markdown(
+        "That is the one place Chrome will not accept as a folder upload. macOS also "
+        "hides it, so it will not appear in the dialog until you go there directly. "
+        "Three ways in, in order of least trouble:"
+    )
+    st.code("~/Library/Application Support/roast-time/roasts", language=None)
+    st.markdown(
+        "1. **Choose files…** — in the dialog press **⌘⇧G**, paste the path above, Return, "
+        "then **⌘A** to select every file and Open. Picking files is allowed where picking "
+        "the folder is not.\n"
+        "2. **Drag it** — in Finder press ⌘⇧G, paste the path, then drag the folder onto "
+        "the box above. Dragging is not the picker and has no such rule. Drag the folder "
+        "into Finder's **sidebar** while you are there and it is one click away after that.\n"
+        "3. **Zip it** — right-click the roasts folder in Finder, **Compress**, and send "
+        "the zip below. A zip is one ordinary file, so nothing objects to it."
+    )
+    st.caption("Windows: the folder is `%APPDATA%\\roast-time\\roasts` and Chrome will "
+               "upload it directly — **Choose folder…** works as-is.")
 
-Picking **files** from these folders works. Picking the **folder itself** does not —
-Chrome refuses anything inside your system Library, saying it *contains system files*.
-That is why the button above asks for files.
+    st.markdown("#### Or send a zip of the folder")
+    zipped = st.file_uploader("A .zip of the roasts folder", type=["zip"],
+                              accept_multiple_files=False, key="zipped",
+                              label_visibility="collapsed")
+    if zipped is not None and st.button("Import that zip", type="primary"):
+        import io
+        import zipfile
 
-On macOS the dialog can jump straight there: press **⌘⇧G** and paste the path. Do that
-once; after that it reopens there by itself.
-
-Nothing is ever written back to RoasTime's folder. The app only reads.
-"""
-        )
-
-    st.divider()
-
-    # ---- everything else --------------------------------------------------
-    with st.expander("Other ways in"):
-        st.markdown("**Drag files in** — works in every browser, including Safari. "
-                    "Roast files, or a zip of the whole folder.")
-        uploads = st.file_uploader("Roast files or a .zip", accept_multiple_files=True,
-                                   type=None, key="uploads", label_visibility="collapsed")
-        if uploads and st.button("Import these"):
+        files = []
+        try:
+            with zipfile.ZipFile(io.BytesIO(zipped.getvalue())) as archive:
+                for member in archive.infolist():
+                    leaf = member.filename.split("/")[-1]
+                    if member.is_dir() or not leaf or leaf.startswith(".") \
+                            or "__MACOSX" in member.filename:
+                        continue
+                    data = archive.read(member)
+                    files.append({"name": leaf,
+                                  "text": data.decode("utf-8-sig", errors="replace"),
+                                  "modified": 0, "size": len(data)})
+        except zipfile.BadZipFile:
+            st.error(f"{zipped.name} is not a zip file.")
             files = []
-            for uploaded in uploads:
-                payload = uploaded.getvalue()
-                if uploaded.name.lower().endswith(".zip"):
-                    import io
-                    import zipfile
-                    try:
-                        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-                            for member in archive.namelist():
-                                if member.endswith("/") or "__MACOSX" in member:
-                                    continue
-                                leaf = member.split("/")[-1]
-                                if not leaf or leaf.startswith("."):
-                                    continue
-                                data = archive.read(member)
-                                files.append({"name": leaf,
-                                              "text": data.decode("utf-8-sig", errors="replace"),
-                                              "modified": 0, "size": len(data)})
-                    except zipfile.BadZipFile:
-                        st.error(f"{uploaded.name} is not a valid zip.")
-                else:
-                    files.append({"name": uploaded.name,
-                                  "text": payload.decode("utf-8-sig", errors="replace"),
-                                  "modified": 0, "size": len(payload)})
+        if files:
             report = import_files(files)
-            st.success(f"Imported {report['added']} roast(s), "
-                       f"skipped {report['skipped']} already here.")
+            st.success(_report_line(report) + f" — from {len(files)} file(s) in the zip")
             for problem in report["problems"][:5]:
                 st.caption(problem)
 
-        st.markdown("---")
-        st.markdown("**Connect a whole folder** — Chrome and Edge only, and not a folder "
-                    "inside your system Library. Once connected it syncs on every visit "
-                    "without you picking anything.")
-        folder = folder_picker(known=store.known_sources(), autosync=True, key="folder_picker")
-        if isinstance(folder, dict):
-            if folder.get("action") == "files" and folder.get("files"):
-                report = import_files(folder["files"])
-                st.success(f"Imported {report['added']} new roast(s) from {folder.get('folder')}")
-                if folder.get("remaining"):
-                    st.rerun()
-            elif folder.get("action") == "error":
-                st.error(folder.get("message"))
+    with st.expander("Stop doing this by hand"):
+        st.markdown(
+            "A web page cannot reach into your Library to copy or zip anything — it has "
+            "no access to your disk until you hand it files. Something on **your Mac** has "
+            "to do it, on a schedule, outside the browser. The `mac/` folder in the "
+            "download has two ways, both set up once and then forgotten:"
+        )
+        st.markdown(
+            "**`roast-sync.command`** — double-click it. It copies your roasts to "
+            "`~/Documents/RoastCoach` and offers to keep doing that every fifteen minutes "
+            "and at login. After that, **Choose folder…** → Documents → RoastCoach works "
+            "forever, because that folder is an ordinary one.\n\n"
+            "**`sync_to_database.py`** — removes the import step instead of easing it. It "
+            "writes new and changed roasts straight into the shared database, so they "
+            "appear here on their own, on every computer. Needs the database from "
+            "`SETUP.md`. `python3 mac/sync_to_database.py --install` and it runs itself."
+        )
+        st.caption("Both only read RoasTime's folder. Neither writes to it. "
+                   "Full instructions are in `mac/README.md`.")
 
         st.markdown("---")
-        st.markdown("**Try it without a roaster** — a simulated history of three coffees "
-                    "dialled in over a few months.")
+        st.markdown("**Copy it once, by hand** — if you would rather not install anything:")
+        system = st.radio("Your computer", ["macOS", "Windows"], horizontal=True,
+                          key="copy_platform", label_visibility="collapsed")
+        if system == "macOS":
+            st.code('mkdir -p ~/Documents/RoastCoach && cp -R ~/Library/Application\\ '
+                    'Support/roast-time/roasts/. ~/Documents/RoastCoach/', language="bash")
+        else:
+            st.code('robocopy "$env:APPDATA\\roast-time\\roasts" '
+                    '"$env:USERPROFILE\\Documents\\RoastCoach" /E', language="powershell")
+
+        st.markdown(
+            "**Or let the app watch that copy** — Chrome and Edge only, and not a folder "
+            "inside your Library, but once connected it picks up new and changed roasts "
+            "on every visit with nothing to press."
+        )
+        watched = folder_watcher(known=store.known_sources(), auto=True, key="folder_watcher")
+        watch_fresh = (isinstance(watched, dict)
+                       and watched.get("seq") != st.session_state.get("_folder_seq"))
+        if watch_fresh:
+            st.session_state["_folder_seq"] = watched.get("seq")
+        if watch_fresh and watched.get("action") == "files" and watched.get("files"):
+            report = import_files(watched["files"])
+            if watched.get("remaining"):
+                st.success(_report_line(report) +
+                           f" — {watched['remaining']} still to read")
+                st.rerun()
+            store.note_sync(watched.get("folder", ""), watched.get("looked", 0))
+            st.session_state["_import_message"] = _report_line(report)
+            st.session_state["_import_done"] = True
+            st.rerun()
+        elif watch_fresh and watched.get("action") == "scanned":
+            store.note_sync(watched.get("folder", ""), watched.get("looked", 0))
+
+        st.markdown("---")
+        st.markdown("**Try it without a roaster** — three coffees dialled in over a few "
+                    "months, simulated.")
         if st.button("Load a demo roasting history"):
             with st.spinner("Simulating a few months of roasting…"):
                 report = import_files(demo_data.as_files(demo_data.history()))
             st.success(f"Loaded {report['added']} simulated roasts across three coffees.")
             st.rerun()
 
-    # ---- where it all lives ----------------------------------------------
+    st.divider()
+
     st.markdown("### Where this is stored")
     if db.is_shared():
         st.success(f"**{db.describe()}** — every computer signed in to this app sees the same "
@@ -675,8 +913,14 @@ Nothing is ever written back to RoasTime's folder. The app only reads.
     else:
         st.warning(f"**{db.describe()}** — this copy only. On Streamlit Community Cloud the "
                    "file is wiped whenever the app restarts, and other computers see nothing. "
-                   "The README has the five-minute fix: a free Postgres database, one line in "
-                   "secrets.", icon=":material/warning:")
+                   "SETUP.md has the fix: a free Postgres database, one line in secrets.",
+                   icon=":material/warning:")
+
+    held = library.counts()
+    if held:
+        st.caption("Also stored from RoasTime: " +
+                   ", ".join(f"{count} {kind}(s)" for kind, count in held.items()) +
+                   " — these fill in origin, process, recipe and machine on each roast.")
 
     with st.expander("Manage stored roasts"):
         st.caption("Removing roasts here does not touch RoasTime — the app only ever reads "

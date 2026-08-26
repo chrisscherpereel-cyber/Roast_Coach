@@ -121,6 +121,71 @@ def _record_failure() -> None:
     st.session_state[ATTEMPTS_KEY] = (count + 1, time.time() if count + 1 >= MAX_ATTEMPTS else since)
 
 
+def where_secrets_live() -> str:
+    """Where to paste an account line, said for wherever this app is running."""
+    if os.environ.get("HOSTNAME", "").startswith("streamlit") or "/mount/src" in os.getcwd():
+        return ("**On Streamlit Cloud:** open the app's menu (top right) → **Settings** → "
+                "**Secrets**, paste, and **Save**. The app restarts by itself.")
+    return ("**On this computer:** put it in `.streamlit/secrets.toml` beside `app.py` "
+            "(create the folder if it is not there), then restart the app.")
+
+
+def first_account() -> None:
+    """What to show when nobody has set up an account yet.
+
+    Secrets cannot be written from inside the app — on Streamlit Cloud they are
+    read-only, and that is the point of them. But the tedious part is making the
+    hash, and the app can do that here rather than sending someone to a terminal
+    they may not have. Making a hash gives nothing away: it is only worth
+    anything once it is pasted into secrets, which needs the app's own settings.
+    """
+    st.error("No accounts are set up yet, so there is nothing to check a password against. "
+             "Make the first one here — it takes about a minute.")
+
+    with st.form("first_account"):
+        name = st.text_input("Name to sign in with", placeholder="chris")
+        password = st.text_input("Password", type="password")
+        again = st.text_input("Password again", type="password")
+        made = st.form_submit_button("Make the line to paste", type="primary",
+                                     use_container_width=True)
+
+    if made:
+        clean = name.strip()
+        if not clean or not password:
+            st.warning("A name and a password, please.")
+        elif password != again:
+            st.warning("Those two passwords are not the same.")
+        elif len(password) < 8:
+            st.warning("Eight characters or more — this is the only thing between the "
+                       "internet and your roasts.")
+        else:
+            st.success("Copy these two lines into the app's secrets.")
+            st.code(f'[passwords]\n{clean} = "{hash_password(password)}"', language="toml")
+            st.markdown(where_secrets_live())
+            st.caption("The password itself is not in that line and cannot be worked back "
+                       "out of it. Add more people by adding more lines under the same "
+                       "`[passwords]` heading. Then sign in with the name and password you "
+                       "just chose.")
+
+    with st.expander("Other ways to make the line"):
+        st.markdown(
+            "- **`password_tool.html`** — open it in any browser, no install, nothing "
+            "leaves the page.\n"
+            "- **`python3 make_login.py`** — the same thing in a terminal.\n\n"
+            "All three produce the same kind of line; use whichever is at hand.")
+
+    # A database only this computer can see has nothing to protect from anyone
+    # else, so local work is not held up by unfinished setup.
+    from . import db
+
+    if not db.is_shared():
+        st.caption("This app is using a database on this computer only, so there is "
+                   "nothing here anyone else could reach.")
+        if st.button("Continue without signing in", use_container_width=True):
+            st.session_state[SESSION_KEY] = "local"
+            st.rerun()
+
+
 def sign_in_form(logo: str | None = None) -> None:
     """The whole page, when nobody is signed in."""
     left, middle, right = st.columns([1, 1.15, 1])
@@ -140,18 +205,7 @@ def sign_in_form(logo: str | None = None) -> None:
             unsafe_allow_html=True)
 
         if not configured():
-            st.error("No accounts are set up yet. Add a `[passwords]` section to this app's "
-                     "secrets — running `python3 make_login.py` prints the lines to paste.")
-            st.code('[passwords]\nchris = "pbkdf2_sha256$240000$…"', language="toml")
-            # A database only this computer can see has nothing to protect from
-            # anyone else, so local work is not held up by unfinished setup.
-            from . import db
-
-            if not db.is_shared():
-                st.caption("This app is using a database on this computer only.")
-                if st.button("Continue without signing in", use_container_width=True):
-                    st.session_state[SESSION_KEY] = "local"
-                    st.rerun()
+            first_account()
             return
 
         locked = _locked_for()

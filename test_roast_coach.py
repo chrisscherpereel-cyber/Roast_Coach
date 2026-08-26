@@ -22,7 +22,7 @@ if SHARED_URL:
 
 import pandas as pd  # noqa: E402
 
-from roastcoach import auth, coach, db, demo_data, learning, store  # noqa: E402
+from roastcoach import auth, coach, db, demo_data, learning, library, store  # noqa: E402
 from roastcoach.fields import parse_roast_text  # noqa: E402
 
 PASS, FAIL = "  ✓", "  ✗"
@@ -64,6 +64,26 @@ check(frame["coffee"].nunique() == 3, "roasts group into three coffees")
 check(frame["label"].str.match(r"\d{4}-\d{2}-\d{2} · .+").all(),
       "every roast is identified by date and coffee")
 
+print("\nWHAT THE FOLDER WATCHER NEEDS")
+known = store.known_sources()
+check(len(known) == len(roasts), "every imported file is remembered by name")
+first_name, (modified, size) = next(iter(known.items()))
+check(modified > 0 and size > 0, "with the timestamp and size that say whether it changed",
+      f"{first_name}: {size} bytes")
+
+changed = demo_data.as_files([r for r in roasts if True][:1])
+changed[0]["text"] = changed[0]["text"].replace('"ambient"', '"ambientTemp"')
+changed[0]["modified"] += 60
+changed[0]["size"] += 1
+edited = store.add_roasts(changed)
+check(edited["updated"] == 1 and edited["added"] == 0,
+      "a file whose contents changed updates its roast rather than adding one")
+
+store.note_sync("roasts", 42)
+state = store.sync_state()
+check(state["folder"] == "roasts" and state["looked"] == 42 and state["checked_at"],
+      "the last folder check is recorded", state["checked_at"])
+
 print("\nPERSISTENCE — the database outlives the process")
 db.reset()                       # every connection dropped, as on a restart
 reopened = store.load_roasts()
@@ -93,6 +113,71 @@ if SHARED_URL:
           "and this one sees those roasts without restarting")
     store.forget([r["uid"] for r in demo_data.history(weeks=2, seed=99)[:2]])
     check(len(store.load_roasts()) == len(roasts), "removing them removes them for everyone")
+
+print("\nEVERYTHING ELSE ROASTIME KEEPS")
+import json as _json  # noqa: E402
+
+bean = {"id": "bean-1", "name": "Costa Rica La Minita Tarrazu RFA", "origin": "Costa Rica",
+        "process": "washed", "varietal": "Caturra", "supplier": "La Minita",
+        "altitude": "1500m", "cropYear": "2025/26"}
+recipe = {"guid": "recipe-1", "recipeName": "CRT 800 Md v4", "targetWeight": 800}
+machine = {"id": "machine-1", "name": "Bullet R1 V2", "serialNumber": 1578}
+library.add_records("bean", [{"name": "bean-1.json", "text": _json.dumps(bean)}])
+library.add_records("recipe", [{"name": "recipe-1.json", "text": _json.dumps(recipe)}])
+library.add_records("container", [{"name": "machine-1.json", "text": _json.dumps(machine)}])
+check(library.counts() == {"bean": 1, "container": 1, "recipe": 1},
+      "bean, recipe and machine files are stored", str(library.counts()))
+
+linked = demo_data.history(weeks=2, seed=451)[:1]
+linked[0]["uid"] = linked[0]["guid"] = "linked-roast"
+linked[0]["beanId"] = "bean-1"
+linked[0]["recipeId"] = "recipe-1"
+linked[0]["containerId"] = "machine-1"
+store.add_roasts(demo_data.as_files(linked))
+joined = store.load_roasts()
+one = joined[joined["uid"] == "linked-roast"].iloc[0]
+check(one["coffee"] == bean["name"], "the roast takes its coffee from the bean file",
+      one["coffee"])
+check(one.get("origin") == "Costa Rica" and one.get("process") == "washed",
+      "origin and process come across without being typed")
+check(one.get("recipe_name") == "CRT 800 Md v4" and one.get("machine_name") == "Bullet R1 V2",
+      "so do the recipe and the machine")
+check("bean → bean-1 ✓" in library.describe_link(one.to_dict()),
+      "and the app can say what linked to what")
+
+unlinked = joined[joined["uid"] != "linked-roast"]
+check(not unlinked.empty and unlinked.iloc[0]["coffee"] != bean["name"],
+      "a roast with no bean id is left exactly as it was")
+
+# The join is done once for the whole table rather than once per roast — five
+# hundred roasts asking one at a time is fifteen hundred round trips.
+rows = joined.to_dict("records")
+bulk = library.enrich_many(rows)
+check(bulk == [library.enrich(row) for row in rows],
+      "joining every roast at once gives exactly what joining them one at a time did")
+
+queries = {"n": 0}
+_real_one = db.one
+db.one = lambda *a, **k: (queries.__setitem__("n", queries["n"] + 1), _real_one(*a, **k))[1]
+try:
+    library.enrich_many(rows)
+finally:
+    db.one = _real_one
+check(queries["n"] == 0, f"and does it without a query per roast ({queries['n']} of them)")
+
+store.forget(["linked-roast"])
+library.clear()
+
+print("\nSTALENESS — roasts that arrive from somewhere else")
+before = store.fingerprint()
+check(bool(before) and int(before[0]) == len(store.load_roasts()),
+      "the signature counts what is stored", str(before[:1]))
+extra = demo_data.history(weeks=2, seed=777)[:1]
+extra[0]["uid"] = extra[0]["guid"] = "outside-roast"
+store.add_roasts(demo_data.as_files(extra))
+check(store.fingerprint() != before,
+      "and moves when a roast arrives, so a held table is read again")
+store.forget(["outside-roast"])
 
 print("\nCURVES")
 first = frame.iloc[0]
@@ -199,6 +284,28 @@ check(auth.weak_accounts() == ["tester"], "an unhashed password in secrets is ca
 
 print("\nTHE APP")
 from streamlit.testing.v1 import AppTest  # noqa: E402
+
+# Nobody has an account yet: the app has to hand over the first one rather than
+# sending the roaster to a terminal to make it.
+_saved_accounts = os.environ.pop("ROAST_COACH_PASSWORDS", None)
+fresh = AppTest.from_file("app.py", default_timeout=120).run()
+check(any("No accounts are set up yet" in message.value for message in fresh.error),
+      "with no accounts the app says so")
+check([field.label for field in fresh.text_input][:3]
+      == ["Name to sign in with", "Password", "Password again"],
+      "and offers to make the first one on the spot")
+fresh.text_input[0].set_value("chris")
+fresh.text_input[1].set_value("a good long password")
+fresh.text_input[2].set_value("a good long password")
+fresh.button[0].click().run()
+line = next((block.value for block in fresh.code if "[passwords]" in block.value), "")
+check("pbkdf2_sha256$240000$" in line and "a good long password" not in line,
+      "which prints a line to paste, with the password nowhere in it")
+made = line.split(" = ")[-1].strip().strip('"') if line else ""
+check(auth.verify("a good long password", made) and not auth.verify("wrong", made),
+      "and that line is one the app will actually sign in with")
+if _saved_accounts:
+    os.environ["ROAST_COACH_PASSWORDS"] = _saved_accounts
 
 app = AppTest.from_file("app.py", default_timeout=300)
 app.session_state[auth.SESSION_KEY] = "tester"

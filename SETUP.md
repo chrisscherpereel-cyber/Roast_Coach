@@ -6,7 +6,8 @@ a database everybody's copy talks to, and a sign-in so nobody else can.
 Both are configured entirely in **secrets**, never in the code — so the repository
 and the Streamlit app can stay public without exposing anything.
 
-Fifteen minutes, once.
+Fifteen minutes, once. Getting roasts *in* needs none of this — see the README for the
+watched folder — but a group sharing one set of roasts needs both of the below.
 
 ---
 
@@ -48,16 +49,41 @@ migration step and nothing to run by hand.
 
 ## 2. Accounts
 
-Run this on your own computer, in the project folder:
+Roast Coach never stores a password. It stores a PBKDF2-SHA256 hash of one, which
+cannot be turned back into the password. Three ways to make them — pick any.
+
+### Easiest: the app itself
+
+Open the app with no accounts set up. Instead of a sign-in it offers to make the
+first one: type the name and password you want, press **Make the line to paste**,
+and it prints the two lines for step 3. The password is not in them and cannot be
+worked back out of them.
+
+That is only the *making* of the line. Secrets are read-only from inside the app —
+which is the point of them — so pasting is still step 3, and still yours.
+
+### Or: the browser tool (nothing to install)
+
+Open **`password_tool.html`** — double-click the file, or use the hosted copy if you
+have the link. Type a name and a password, press **Add to the list**, repeat for each
+person, then copy the block it builds.
+
+The hashing happens in your own browser using its built-in crypto. Nothing is sent
+anywhere, nothing is saved, and the page works with no internet connection. Close the
+tab and the passwords are gone — so copy the block first.
+
+### Or: the script
+
+On your own computer, in the project folder:
 
 ```bash
 pip install -r requirements.txt
 python3 make_login.py
 ```
 
-It asks for a name and a password for each person, and prints a block to paste.
-The passwords themselves are never stored — only a PBKDF2-SHA256 hash of each,
-which cannot be turned back into the password.
+It asks for a name and password for each person and prints the same block.
+
+All three produce identical output; use whichever is less trouble.
 
 ---
 
@@ -150,9 +176,12 @@ in the URL, or the password has a character that needs percent-encoding.
 **The Data page says SQLite** — the `[database]` section is missing or misspelled
 in secrets. It must be exactly `[database]` with a `url` key.
 
-**"No accounts are set up yet"** — the `[passwords]` section is missing. On a
-local database only, the app offers a "Continue without signing in" button; on a
-shared one it does not, on purpose.
+**"No accounts are set up yet"** — the `[passwords]` section is missing, or it is
+there but the app has not restarted since. The screen that says so also makes the
+first account for you: fill in a name and password, press **Make the line to
+paste**, and put the result in secrets as in step 3. On a local database only, it
+additionally offers "Continue without signing in"; on a shared one it does not, on
+purpose.
 
 **Everything is slow the first time each morning** — Supabase pausing an idle
 free project. It wakes on the first connection.

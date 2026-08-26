@@ -1,21 +1,26 @@
 """
-One click, the same folder, only what is new.
+The same folder, every time, and only what has changed in it.
 
 Roast Coach runs in the cloud and has no access to anyone's disk, so roasts have
 to be handed to it by the browser. A plain file input would mean navigating to
 the same folder every single time — and on macOS that folder is buried inside
 ``~/Library``, which the *folder* picker refuses to open at all.
 
-This does better. Chrome and Edge let a file picker be given an ``id``, and they
-reopen it wherever it was last used; the component also stores a handle to the
-last file chosen and passes it as the picker's starting point. After the first
-visit, adding roasts is: click, select all, done — and the dialog is already in
-the right folder, Library or not, because picking *files* is allowed where
-picking a folder is not.
+Two ways round that, and the app offers both.
 
-Before anything is read, the browser is given the list of files already imported
-— name, size and timestamp — and skips them. Only genuinely new or changed files
-are opened and sent, ten at a time.
+:func:`folder_watcher` is the one to reach for. The folder is chosen once; Chrome
+holds the permission and the component holds the handle in IndexedDB, so on every
+later visit the app lists the folder itself, works out which files are new or have
+changed since last time, and reads only those. No path is ever typed, and after
+the first visit there is usually nothing to click.
+
+:func:`add_roasts_button` is the fallback for when that folder cannot be watched —
+Chrome refuses to share anything inside the macOS Library, and Safari and Firefox
+have no folder API at all. It asks for *files*, which is allowed where a folder is
+not, and reopens in the folder last used.
+
+Both are handed the list of what has already been imported, and neither opens a
+file the app already has.
 """
 
 from __future__ import annotations
@@ -44,10 +49,23 @@ def add_roasts_button(known: dict, key: str = "uploader"):
     return _upload(known=known, key=key, default=None)
 
 
-def folder_picker(known: dict, autosync: bool = True, key: str = "folder"):
-    """Read a whole folder on every visit, where the browser allows it.
+def folder_watcher(known: dict, auto: bool = True, key: str = "folder"):
+    """Watch one folder and pick up whatever has changed in it.
 
-    ``known`` is the same map as above. Returns ``{"action": "files"|"scanned"|
-    "disconnected"|"error", …}``.
+    The folder is chosen once. Chrome keeps the handle, this component keeps it in
+    IndexedDB, and neither the roaster nor the app ever handles a path again. On
+    each visit the browser lists the folder, compares every file against ``known``
+    (name → ``(modified, size)``) and reads only the ones that are new or whose
+    timestamp or size has moved. With ``auto`` set that happens on arrival, with
+    no click at all.
+
+    Returns one of:
+
+    ``{"action": "files", "folder", "files", "remaining", "fresh", "changed", "looked"}``
+    ``{"action": "scanned", "folder", "looked"}``      — looked, nothing had changed
+    ``{"action": "disconnected"}``
+    ``{"action": "error", "blocked": bool, "message"}``
+
+    Every message carries a ``seq``; act on each one once.
     """
-    return _folder(known=known, autosync=autosync, key=key, default=None)
+    return _folder(known=known, auto=auto, key=key, default=None)

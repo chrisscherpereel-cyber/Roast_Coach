@@ -37,7 +37,7 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from . import db
+from . import db, library
 from .fields import create_roast
 from .metrics import curve_frame, curve_metrics
 from .origin import origin_from_name, roast_number_from_name
@@ -51,7 +51,7 @@ NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
                "roast_level", "notes", "rating", "cupping_score", "is_reference"]
 
 TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
-          "effects", "rule_stats", "sources")
+          "effects", "rule_stats", "sources", "reference")
 
 
 def _now() -> str:
@@ -200,6 +200,24 @@ def known_sources(path: str | None = None) -> dict:
             for row in db.rows("SELECT name, modified, size FROM sources", override=path)}
 
 
+def note_sync(folder: str, looked: int, path: str | None = None) -> None:
+    """Remember that the folder was checked, and when — shown on the Data page."""
+    db.upsert("meta", "key", {"key": "last_sync", "value": _now()}, override=path)
+    db.upsert("meta", "key", {"key": "last_folder", "value": str(folder or "")}, override=path)
+    db.upsert("meta", "key", {"key": "last_looked", "value": str(int(looked or 0))},
+              override=path)
+
+
+def sync_state(path: str | None = None) -> dict:
+    """When the watched folder was last checked, and what it is called."""
+    rows = db.rows("SELECT key, value FROM meta WHERE key IN "
+                   "('last_sync', 'last_folder', 'last_looked', 'last_import')", override=path)
+    found = {key: value for key, value in rows}
+    return {"checked_at": found.get("last_sync"), "folder": found.get("last_folder"),
+            "looked": int(found.get("last_looked") or 0),
+            "imported_at": found.get("last_import")}
+
+
 def known_hashes(path: str | None = None) -> set:
     return {row[0] for row in db.rows(
         "SELECT content_hash FROM sources WHERE content_hash IS NOT NULL", override=path)}
@@ -268,6 +286,14 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
         row["batch_number"] = roast_number_from_name(roast_json.get("roastName"))
         row["source_name"] = name
         row["imported_at"] = stamp
+        # The ids that point at the bean, the recipe and the machine are not
+        # roast measurements, so create_roast() does not carry them. Keep them.
+        for key in ("beanId", "beanGuid", "recipeId", "recipeGuid", "officialRecipeId",
+                    "containerId", "machineId", "userProfileId", "userId",
+                    "roastNumber", "energy", "energyUsed", "totalEnergy",
+                    "preheatTemperature", "recipeName", "beanName"):
+            if key in roast_json and key not in row:
+                row[key] = _plain(roast_json[key])
 
         db.upsert("roasts", "uid", {
             "uid": roast_id,
@@ -305,7 +331,38 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
 # ---------------------------------------------------------------------------
 
 
-def summary(path: str | None = None) -> dict:
+def fingerprint(path: str | None = None) -> tuple:
+    """A cheap signature of the stored data, for deciding whether a cache is stale.
+
+    Roasts do not only arrive through the app. `mac/sync_to_database.py` writes
+    straight into the same database, and so does anybody else signed in on
+    another computer. A page that holds a table it read once would then keep
+    showing yesterday's roasts — or, from a cold start, none at all — while the
+    Data page, which counts rows every time, cheerfully reports five hundred.
+
+    One query answers "has anything changed", so every rerun can ask.
+    """
+    try:
+        row = db.one(
+            "SELECT (SELECT COUNT(*) FROM roasts),"
+            "       (SELECT MAX(imported_at) FROM roasts),"
+            "       (SELECT COUNT(*) FROM roast_notes),"
+            "       (SELECT MAX(updated_at) FROM roast_notes),"
+            "       (SELECT COUNT(*) FROM reference),"
+            "       (SELECT MAX(updated_at) FROM reference)",
+            override=path)
+    except Exception:
+        return ()
+    return tuple("" if value is None else str(value) for value in (row or ()))
+
+
+def summary(path: str | None = None, frame: pd.DataFrame | None = None) -> dict:
+    """The counts for the Data page.
+
+    ``frame`` is the already-loaded roast table, if the caller has one. Counting
+    distinct coffees needs the resolved names, and reading five hundred roasts a
+    second time to get them is work nobody asked for.
+    """
     empty = {"roasts": 0, "coffees": 0, "samples": 0, "first": None, "last": None,
              "imported_at": None, "open_recommendations": 0}
     try:
@@ -321,7 +378,8 @@ def summary(path: str | None = None) -> dict:
     if not roasts:
         return empty
 
-    frame = load_roasts(path)
+    if frame is None:
+        frame = load_roasts(path)
     return {
         "roasts": int(roasts), "samples": int(samples or 0),
         "coffees": int(frame["coffee"].nunique()) if not frame.empty else 0,
@@ -357,15 +415,35 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
     roasts["roasted_at"] = pd.to_datetime(roasts["dateTime"], unit="ms", errors="coerce")
     roasts = roasts.sort_values("roasted_at", na_position="first").reset_index(drop=True)
 
-    guess = roasts.get("coffee_guess", pd.Series("", index=roasts.index))
-    roasts["coffee"] = (
-        roasts["coffee"].astype("object").where(roasts["coffee"].notna() & (roasts["coffee"] != ""))
-        .fillna(guess).replace("", np.nan)
-        .fillna("Unnamed coffee")
-    )
+    typed = roasts["coffee"].astype("object").where(
+        roasts["coffee"].notna() & (roasts["coffee"] != ""))
+    roasts["is_reference"] = roasts.get("is_reference", 0).fillna(0).astype(int)
+
+    # Whatever the bean, recipe and machine files add. Only columns that were
+    # actually found appear, so nothing changes for a folder of roasts alone.
+    extra = library.enrich_many(roasts.to_dict("records"), path)
+    for column in sorted({key for found in extra for key in found}):
+        values = [found.get(column) for found in extra]
+        if column in roasts.columns:
+            roasts[column] = roasts[column].fillna(pd.Series(values, index=roasts.index))
+        else:
+            roasts[column] = values
+
+    # What the coffee is called, in order of how much it can be trusted: what the
+    # roaster typed, then the bean file RoasTime linked, then a guess scraped out
+    # of the roast name.
+    # The country is guessed from the roast name only when nothing better exists:
+    # a bean file that says Costa Rica must beat "Ethiopia" read out of a title.
     if "origin" in roasts:
         roasts["origin"] = roasts["origin"].fillna(roasts.get("origin_guess"))
-    roasts["is_reference"] = roasts.get("is_reference", 0).fillna(0).astype(int)
+
+    guess = roasts.get("coffee_guess", pd.Series("", index=roasts.index))
+    named = roasts.get("bean_name", pd.Series(np.nan, index=roasts.index))
+    roasts["coffee"] = (typed
+                        .fillna(named.replace("", np.nan))
+                        .fillna(guess).replace("", np.nan)
+                        .fillna("Unnamed coffee"))
+
     roasts["label"] = [roast_label(row) for _, row in roasts.iterrows()]
 
     # The weights the roaster typed win over whatever RoasTime recorded.

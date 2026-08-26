@@ -11,23 +11,39 @@
   @media (prefers-color-scheme: dark) { body { color: #efe9e3; } }
   .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   button {
-    font: inherit; font-weight: 600; padding: 9px 16px; border-radius: 9px; cursor: pointer;
+    font: inherit; font-weight: 600; padding: 11px 20px; border-radius: 9px; cursor: pointer;
     border: 1px solid transparent; background: #E8622A; color: #fff; transition: filter .12s;
   }
   button:hover { filter: brightness(1.06); }
-  button.quiet { background: transparent; border-color: currentColor; color: inherit; font-weight: 500; }
+  button.quiet {
+    background: transparent; border-color: rgba(128,110,100,.45); color: inherit;
+    font-weight: 500; padding: 9px 15px;
+  }
   button[disabled] { opacity: .5; cursor: default; filter: none; }
-  .note { opacity: .72; font-size: 13px; margin-top: 8px; }
-  .folder { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-  .bar { height: 6px; border-radius: 99px; background: rgba(128,110,100,.25); overflow: hidden; margin-top: 10px; }
+  .note { opacity: .78; font-size: 13px; margin-top: 10px; }
+  .note b { font-weight: 600; opacity: 1; }
+  .folder {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; font-weight: 600;
+  }
+  .bar {
+    height: 6px; border-radius: 99px; background: rgba(128,110,100,.25);
+    overflow: hidden; margin-top: 10px;
+  }
   .bar > i { display: block; height: 100%; background: #E8622A; width: 0; transition: width .2s; }
   .warn { color: #b4471f; }
+  .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 99px;
+    background: #2E9E63; margin-right: 7px; vertical-align: 1px;
+  }
+  .dot.idle { background: #C9A227; }
 </style>
 </head>
 <body>
 <div class="row">
-  <button id="pick">Choose roasts folder</button>
-  <button id="sync" class="quiet" hidden>Check for new roasts</button>
+  <button id="connect">Connect roasts folder</button>
+  <button id="check" class="quiet" hidden>Check for new roasts</button>
+  <button id="change" class="quiet" hidden>Change folder</button>
   <button id="forget" class="quiet" hidden>Disconnect</button>
 </div>
 <div class="bar" hidden id="barwrap"><i id="bar"></i></div>
@@ -36,25 +52,39 @@
 <script>
 const BATCH = 12;
 const ROAST_HINTS = ["beanTemperature", "drumTemperature", "roastName", "beanDerivative"];
+
 let args = {};
 let handle = null;
-let busy = false;
+let queue = [];            // entries still to read
+let counts = { fresh: 0, changed: 0, looked: 0 };
+let sequence = 0;
+let working = false;
+let scannedThisLoad = false;
+
+const $ = (id) => document.getElementById(id);
 
 /* --- Streamlit component protocol, without the npm package --- */
 function send(value) {
-  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value }, "*");
+  sequence += 1;
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setComponentValue",
+      value: { ...value, seq: sequence } }, "*");
 }
-function height(h) {
-  window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height: h }, "*");
+function height() {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setFrameHeight",
+      height: document.body.scrollHeight + 8 }, "*");
 }
 window.addEventListener("message", (event) => {
   if (event.data.type !== "streamlit:render") return;
   args = event.data.args || {};
-  render();
+  if (queue.length) pump();          // the app is ready for the next batch
+  height();
 });
-window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+window.parent.postMessage(
+  { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
 
-/* --- remembering the folder between visits --- */
+/* --- the folder is remembered between visits, so the path never gets typed --- */
 function idb() {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open("roast-coach", 1);
@@ -64,12 +94,14 @@ function idb() {
   });
 }
 async function remember(value) {
-  const db = await idb();
-  await new Promise((resolve) => {
-    const tx = db.transaction("handles", "readwrite");
-    tx.objectStore("handles").put(value, "roasts");
-    tx.oncomplete = resolve;
-  });
+  try {
+    const db = await idb();
+    await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readwrite");
+      tx.objectStore("handles").put(value, "roasts");
+      tx.oncomplete = resolve;
+    });
+  } catch (error) { /* nothing to do; the picker still remembers by id */ }
 }
 async function recall() {
   try {
@@ -83,9 +115,16 @@ async function recall() {
   } catch (error) { return null; }
 }
 
-/* --- reading the folder --- */
-function looksLikeRoast(name, text) {
-  const head = text.slice(0, 3000);
+/* --- what the app already has --- */
+function statusOf(file) {
+  const previous = (args.known || {})[file.name];
+  if (!previous) return "fresh";
+  const sameTime = Math.abs(previous[0] - file.lastModified / 1000) < 1;
+  return sameTime && previous[1] === file.size ? "same" : "changed";
+}
+
+function looksLikeRoast(text) {
+  const head = text.slice(0, 4000);
   const trimmed = head.replace(/^\s+/, "");
   if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
     return ROAST_HINTS.some((hint) => head.includes(hint));
@@ -94,136 +133,198 @@ function looksLikeRoast(name, text) {
   return lower.includes("timeline") && (lower.includes("ibts") || lower.includes("bean probe"));
 }
 
-async function scan() {
-  if (!handle || busy) return;
-  busy = true;
-  const known = args.known || {};
-  const note = document.getElementById("note");
-  const barwrap = document.getElementById("barwrap");
-  const bar = document.getElementById("bar");
-
-  try {
-    const candidates = [];
-    const skipped = {};
-    for await (const entry of handle.values()) {
-      if (entry.kind !== "file" || entry.name.startsWith(".")) continue;
-      const extension = entry.name.includes(".") ? entry.name.split(".").pop().toLowerCase() : "";
-      if (!["", "json", "csv"].includes(extension)) {
-        skipped[extension] = (skipped[extension] || 0) + 1;
-        continue;
-      }
-      const file = await entry.getFile();
-      const previous = known[entry.name];
-      if (previous && Math.abs(previous[0] - file.lastModified / 1000) < 1 && previous[1] === file.size) continue;
-      candidates.push({ entry, file });
-    }
-
-    if (!candidates.length) {
-      const others = Object.keys(skipped).map((e) => skipped[e] + " ." + e).join(", ");
-      note.textContent = "Nothing new in " + handle.name + "." +
-        (others ? " (Ignored " + others + " — roasts are .json or .csv.)" : "");
-      barwrap.hidden = true;
-      send({ action: "scanned", folder: handle.name, files: [], remaining: 0, total: 0 });
-      busy = false;
-      return;
-    }
-
-    barwrap.hidden = false;
-    const take = candidates.slice(0, BATCH);
-    const files = [];
-    for (let index = 0; index < take.length; index += 1) {
-      const { entry, file } = take[index];
-      const text = await file.text();
-      if (!looksLikeRoast(entry.name, text)) continue;
-      files.push({ name: entry.name, text, modified: file.lastModified / 1000, size: file.size });
-      bar.style.width = Math.round(((index + 1) / take.length) * 100) + "%";
-    }
-
-    const remaining = candidates.length - take.length;
-    note.textContent = files.length
-      ? "Reading " + files.length + " roast(s) from " + handle.name +
-        (remaining ? " — " + remaining + " to go" : "")
-      : "Read " + take.length + " file(s) in " + handle.name + ", but none look like a roast. " +
-        "A RoasTime CSV has a Timeline section; a roast file is JSON.";
-    send({ action: "files", folder: handle.name, files, remaining, total: candidates.length });
-  } catch (error) {
-    note.innerHTML = '<span class="warn">' + error.message + "</span>";
-    send({ action: "error", message: String(error.message || error) });
-  }
-  busy = false;
+/* --- what the roaster sees --- */
+function buttons({ connected, needsClick }) {
+  $("connect").hidden = connected || needsClick;
+  $("check").hidden = !connected;
+  $("change").hidden = !connected;
+  $("forget").hidden = !connected && !needsClick;
+  height();
 }
 
+function say(html, warn) {
+  $("note").innerHTML = warn ? '<span class="warn">' + html + "</span>" : html;
+  height();
+}
+
+function summary(extra) {
+  const parts = [];
+  if (handle) parts.push('<span class="dot"></span>Watching <span class="folder">' +
+                         handle.name + "</span>");
+  if (extra) parts.push(extra);
+  say(parts.join(" · "));
+}
+
+/* --- reading --- */
+async function pump() {
+  if (working || !queue.length) return;
+  working = true;
+  const take = queue.splice(0, BATCH);
+  const files = [];
+  const notRoasts = [];
+
+  $("barwrap").hidden = false;
+  for (let index = 0; index < take.length; index += 1) {
+    const { entry, file, state } = take[index];
+    try {
+      const text = await file.text();
+      if (looksLikeRoast(text)) {
+        files.push({ name: entry.name, text,
+                     modified: file.lastModified / 1000, size: file.size, state });
+      } else {
+        notRoasts.push(entry.name);
+      }
+    } catch (error) {
+      notRoasts.push(entry.name);
+    }
+    const total = counts.fresh + counts.changed;
+    $("bar").style.width =
+      Math.round(((total - queue.length - (take.length - index - 1)) / Math.max(1, total)) * 100)
+      + "%";
+  }
+
+  if (queue.length) {
+    summary(queue.length + " still to read");
+  } else {
+    $("barwrap").hidden = true;
+    summary("up to date");
+  }
+  send({ action: "files", folder: handle.name, files, remaining: queue.length,
+         notRoasts, fresh: counts.fresh, changed: counts.changed, looked: counts.looked });
+  working = false;
+}
+
+async function scan(quiet) {
+  if (!handle || working) return;
+  counts = { fresh: 0, changed: 0, looked: 0 };
+  const found = [];
+  const ignored = {};
+
+  try {
+    if (!quiet) summary("looking…");
+    for await (const entry of handle.values()) {
+      if (entry.kind !== "file" || entry.name.startsWith(".")) continue;
+      const extension = entry.name.includes(".")
+        ? entry.name.split(".").pop().toLowerCase() : "";
+      if (!["", "json", "csv"].includes(extension)) {
+        ignored[extension] = (ignored[extension] || 0) + 1;
+        continue;
+      }
+      counts.looked += 1;
+      const file = await entry.getFile();
+      const state = statusOf(file);
+      if (state === "same") continue;
+      counts[state === "fresh" ? "fresh" : "changed"] += 1;
+      found.push({ entry, file, state });
+    }
+  } catch (error) {
+    say("Could not read that folder: " + (error.message || error), true);
+    send({ action: "error", message: String(error.message || error) });
+    return;
+  }
+
+  if (!found.length) {
+    const others = Object.keys(ignored).map((e) => ignored[e] + " ." + e).join(", ");
+    summary("nothing new in " + counts.looked + " roast file" +
+            (counts.looked === 1 ? "" : "s") +
+            (others ? " (ignored " + others + ")" : ""));
+    $("barwrap").hidden = true;
+    send({ action: "scanned", folder: handle.name, looked: counts.looked });
+    return;
+  }
+
+  const wording = [];
+  if (counts.fresh) wording.push("<b>" + counts.fresh + "</b> new");
+  if (counts.changed) wording.push("<b>" + counts.changed + "</b> changed");
+  summary(wording.join(" and ") + " — reading");
+  queue = found;
+  pump();
+}
+
+/* --- connecting --- */
 async function choose() {
   try {
-    handle = await window.showDirectoryPicker({ id: "roast-coach-roasts", mode: "read" });
+    handle = await window.showDirectoryPicker({ id: "roast-coach-folder", mode: "read" });
     await remember(handle);
-    document.getElementById("sync").hidden = false;
-    document.getElementById("forget").hidden = false;
-    document.getElementById("note").textContent = "Connected to " + handle.name + ".";
-    height(document.body.scrollHeight + 8);
+    scannedThisLoad = true;
+    buttons({ connected: true });
+    summary("connected");
     scan();
   } catch (error) {
-    if (!error || error.name === "AbortError") return;   // the picker was closed
+    if (!error || error.name === "AbortError") return;      // the picker was closed
     const blocked = error.name === "SecurityError" || error.name === "NotAllowedError" ||
                     /system files|not allowed|blocked/i.test(error.message || "");
-    document.getElementById("note").innerHTML = '<span class="warn">' + (blocked
-      ? "Chrome will not share that folder — it sits somewhere Chrome treats as system " +
-        "files. Copy the roasts into Documents and connect the copy, or upload them below."
-      : error.message) + "</span>";
-    height(document.body.scrollHeight + 8);
+    say(blocked
+      ? "Chrome will not share that folder — it treats anything inside your system " +
+        "Library as off limits. Copy the roasts to Documents and connect the copy, or " +
+        "use <b>Pick files instead</b> below, which is allowed."
+      : error.message, true);
+    send({ action: "error", blocked, message: String(error.message || error) });
   }
 }
 
 async function restore() {
   const saved = await recall();
-  if (!saved) return false;
-  const permission = await saved.queryPermission({ mode: "read" });
+  if (!saved) {
+    buttons({ connected: false });
+    say("Not connected yet.");
+    return;
+  }
+  let permission = "prompt";
+  try {
+    permission = await saved.queryPermission({ mode: "read" });
+  } catch (error) { permission = "prompt"; }
+
   if (permission === "granted") {
     handle = saved;
-    document.getElementById("pick").textContent = "Change folder";
-    document.getElementById("sync").hidden = false;
-    document.getElementById("forget").hidden = false;
-    document.getElementById("note").textContent = "Connected to " + saved.name + ".";
-    if (args.autosync) scan();
-    return true;
+    buttons({ connected: true });
+    if (args.auto && !scannedThisLoad) { scannedThisLoad = true; scan(true); }
+    else summary("");
+    return;
   }
-  if (permission === "prompt") {
-    document.getElementById("pick").textContent = "Reconnect " + saved.name;
-    document.getElementById("pick").onclick = async () => {
-      const granted = await saved.requestPermission({ mode: "read" });
-      if (granted === "granted") { handle = saved; document.getElementById("sync").hidden = false; scan(); }
-      else { choose(); }
-    };
-    return true;
-  }
-  return false;
+
+  // Chrome asks again after a browser restart. One click, not a new folder.
+  buttons({ connected: false, needsClick: true });
+  $("connect").hidden = false;
+  $("connect").textContent = "Reconnect " + saved.name;
+  say('<span class="dot idle"></span>Your browser needs one click to reopen <span ' +
+      'class="folder">' + saved.name + "</span> — it does not ask for the path again.");
+  $("connect").onclick = async () => {
+    let granted = "denied";
+    try { granted = await saved.requestPermission({ mode: "read" }); } catch (error) { }
+    if (granted === "granted") {
+      handle = saved;
+      scannedThisLoad = true;
+      $("connect").textContent = "Connect roasts folder";
+      buttons({ connected: true });
+      scan();
+    } else {
+      choose();
+    }
+  };
 }
 
-function render() {
-  const supported = typeof window.showDirectoryPicker === "function";
-  const note = document.getElementById("note");
-  if (!supported) {
-    document.getElementById("pick").disabled = true;
-    note.innerHTML = "This browser cannot grant folder access. Chrome or Edge can — " +
-      "or upload your roasts below, which works everywhere.";
-  }
-  height(document.body.scrollHeight + 8);
-}
-
-document.getElementById("pick").onclick = choose;
-document.getElementById("sync").onclick = scan;
-document.getElementById("forget").onclick = async () => {
+$("connect").onclick = choose;
+$("change").onclick = choose;
+$("check").onclick = () => scan();
+$("forget").onclick = async () => {
   handle = null;
+  queue = [];
   await remember(null);
-  document.getElementById("sync").hidden = true;
-  document.getElementById("forget").hidden = true;
-  document.getElementById("pick").textContent = "Choose roasts folder";
-  document.getElementById("note").textContent = "Folder disconnected. Your imported roasts are still here.";
+  $("connect").textContent = "Connect roasts folder";
+  buttons({ connected: false });
+  say("Folder disconnected. The roasts already imported are still here.");
   send({ action: "disconnected" });
 };
 
-restore().then(render);
-setTimeout(render, 200);
+if (typeof window.showDirectoryPicker !== "function") {
+  $("connect").disabled = true;
+  say("This browser cannot watch a folder — that is Chrome and Edge only. " +
+      "Use <b>Pick files instead</b> below; it works everywhere.");
+} else {
+  restore();
+}
+setTimeout(height, 200);
 </script>
 </body>
 </html>
