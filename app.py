@@ -51,6 +51,31 @@ STALE = [name for name, module, wanted in NEEDS
          if getattr(module, "VERSION", 0) < wanted]
 
 
+def deploy_report() -> list[dict]:
+    """Which copy of each module actually got imported, and how old it is.
+
+    "Update these files" is useless advice if the files you updated are not the
+    ones Python is reading. This says the path, so a second copy of the package
+    further up sys.path — or an unzipped folder inside the repo — shows itself.
+    """
+    import roastcoach
+
+    beside = Path(__file__).resolve().parent
+    package = Path(getattr(roastcoach, "__file__", "") or ".").resolve().parent
+    rows = []
+    for name, module, wanted in NEEDS:
+        found = getattr(module, "VERSION", 0)
+        where = Path(getattr(module, "__file__", "") or "?").resolve()
+        rows.append({
+            "file": name,
+            "needs": wanted,
+            "found": found or "before versions",
+            "up to date": "yes" if found >= wanted else "no",
+            "the file Python read": str(where),
+        })
+    return rows, package, beside
+
+
 def optional(module, name, *args, default=None, **kwargs):
     """Call something a newer version of that module has, if this copy has it.
 
@@ -232,7 +257,8 @@ def account_strip(user: str):
             st.caption(":orange[This computer only — see the README to share a database.]")
         if STALE:
             st.caption(":orange[Update " + ", ".join(STALE) +
-                       " — this deploy has an older copy than app.py expects.]")
+                       " — this deploy has an older copy than app.py expects. "
+                       "The **Data** page says which file Python actually read.]")
         if st.button("Sign out", use_container_width=True):
             auth.sign_out()
             st.rerun()
@@ -1018,6 +1044,29 @@ def page_data():
             st.rerun()
 
     st.divider()
+
+    if STALE:
+        rows, package, beside = deploy_report()
+        st.markdown("### Files this deploy is running")
+        st.warning(
+            "app.py is newer than the `roastcoach/` files next to it. Everything below "
+            "still works — the app fills the gaps in — but phase percentages, the bean "
+            "grouping and the re-measure only come right once these match.",
+            icon=":material/sync_problem:")
+        st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+
+        if package != beside / "roastcoach":
+            st.error(
+                f"**Python is reading `roastcoach/` from somewhere else.** app.py is in "
+                f"`{beside}`, but the package it imported is `{package}`. Updating the copy "
+                "beside app.py will not change anything until the other one is removed.",
+                icon=":material/error:")
+        else:
+            st.caption(
+                "Those paths are inside this deployment, not on your computer. If they look "
+                "right, the files at those paths are simply the older ones: replace the whole "
+                "`roastcoach/` folder in the repository — delete it and add the new one in the "
+                "same commit, so nothing is left behind — and the app will restart by itself.")
 
     st.markdown("### Where this is stored")
     if db.is_shared():
