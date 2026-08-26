@@ -118,6 +118,13 @@ Neither secret is in the repository, and the app tells you on the **Data** page 
 database it is actually using — so a misconfigured deploy announces itself instead of
 quietly losing data.
 
+A roast's numbers are worked out once, at import, and kept with it — which is what makes the
+pages quick, and what means a corrected calculation would otherwise only reach roasts imported
+after the correction. Each roast carries the version of the metrics that measured it; when
+that falls behind, the Data page offers to **measure them again** from the curves already
+stored — nothing is re-imported, and nothing you typed is touched. The Mac sync does it by
+itself, before anyone is looking.
+
 Roasts do not only arrive through the browser: the Mac sync writes straight into the
 database, and so does anybody else signed in. Every page checks a one-query signature of
 what is stored — how many roasts, when the last one landed — and reads the table again by

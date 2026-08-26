@@ -211,6 +211,33 @@ check(queries["n"] == 0, f"and does it without a query per roast ({queries['n']}
 store.forget(["linked-roast"])
 library.clear()
 
+print("\nCORRECTIONS REACH ROASTS ALREADY STORED")
+# A roast's numbers are worked out at import and kept with it, so a corrected
+# calculation has to be applied to what is already in the database — from the
+# stored curve, with nothing re-imported and nothing typed lost.
+_before = store.outdated()
+check(_before == 0, "nothing is out of date right after an import", str(_before))
+
+_target = store.load_roasts().iloc[0]["uid"]
+_stored = _json.loads(db.one("SELECT data FROM roasts WHERE uid = :id", {"id": _target})[0])
+_stored["metrics_version"] = 1
+_stored["developmentTime"] = -999.0                      # a wrong number from "an older app"
+_stored["flagExcessiveDevelopment"] = True
+db.run("UPDATE roasts SET data = :data WHERE uid = :id",
+       {"data": _json.dumps(_stored), "id": _target})
+store.save_notes(_target, {"notes": "kept through a re-measure"})
+
+check(store.outdated() == 1, "a roast measured by an older version is counted",
+      str(store.outdated()))
+check(store.remeasure() == 1, "and measured again from its own stored curve")
+_fixed = store.load_roasts()
+_row = _fixed[_fixed["uid"] == _target].iloc[0]
+check(_row["developmentTime"] > 0 and not _row["flagExcessiveDevelopment"],
+      "which replaces the old numbers and the warning that came from them",
+      f"development {_row['developmentTime']:.2f} min")
+check(_row["notes"] == "kept through a re-measure", "without touching what the roaster typed")
+check(store.outdated() == 0, "and nothing is left behind")
+
 print("\nSTALENESS — roasts that arrive from somewhere else")
 before = store.fingerprint()
 check(bool(before) and int(before[0]) == len(store.load_roasts()),

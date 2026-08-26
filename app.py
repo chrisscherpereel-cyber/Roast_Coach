@@ -1018,6 +1018,28 @@ def page_data():
                    ", ".join(f"{count} {kind}(s)" for kind, count in held.items()) +
                    " — these fill in origin, process, recipe and machine on each roast.")
 
+    # A roast's numbers are worked out once, at import, and kept with it. When a
+    # calculation is corrected, the roasts already in the database still carry the
+    # old answer until they are measured again — so say so, and offer to do it.
+    behind = store.outdated()
+    if behind:
+        st.info(
+            f"**{behind} roast(s) were measured by an earlier version of the app.** "
+            "Their phase percentages — and any pattern warnings that came from them — "
+            "are the old calculation. Nothing needs re-importing: the curves are already "
+            "here, so they can simply be measured again.", icon=":material/calculate:")
+        if st.button("Bring them up to date", type="primary"):
+            bar = st.progress(0.0, text="Measuring…")
+            done = store.remeasure(
+                progress=lambda position, total: bar.progress(
+                    position / max(total, 1), text=f"Measuring… {position} of {total}"))
+            bar.empty()
+            learning.relearn(store.load_roasts())
+            refresh()
+            st.session_state["_import_done"] = True
+            st.session_state["_import_message"] = f"Measured {done} roast(s) again."
+            st.rerun()
+
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a
     # roast quietly fall back to a name read off its title.

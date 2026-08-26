@@ -39,7 +39,7 @@ import pandas as pd
 
 from . import db, library
 from .fields import create_roast
-from .metrics import curve_frame, curve_metrics
+from .metrics import METRICS_VERSION, curve_frame, curve_metrics
 from .origin import origin_from_name, roast_number_from_name
 
 CURVE_COLUMNS = ["roast_id", "seconds", "ibts_temp", "bean_temp",
@@ -286,6 +286,7 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
         row["batch_number"] = roast_number_from_name(roast_json.get("roastName"))
         row["source_name"] = name
         row["imported_at"] = stamp
+        row["metrics_version"] = METRICS_VERSION
         # The ids that point at the bean, the recipe and the machine are not
         # roast measurements, so create_roast() does not carry them. Keep them.
         for key in ("beanId", "beanGuid", "recipeId", "recipeGuid", "officialRecipeId",
@@ -483,6 +484,62 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
             (1 - roasts["weightRoasted"] / roasts["greenWeight"]) * 100, np.nan)
 
     return roasts
+
+
+# ---------------------------------------------------------------------------
+# Bringing stored roasts up to date
+# ---------------------------------------------------------------------------
+
+
+_VERSION_MARKER = f'%"metrics_version": {METRICS_VERSION}%'
+
+
+def outdated(path: str | None = None) -> int:
+    """How many stored roasts were measured by an older version of the metrics.
+
+    A roast's numbers are worked out once, at import, and kept with it — which is
+    what makes the pages quick. The cost is that correcting a calculation does
+    not reach roasts already in the database. This counts the ones left behind so
+    the app can offer to redo them.
+    """
+    try:
+        row = db.one("SELECT COUNT(*) FROM roasts WHERE data NOT LIKE :marker",
+                     {"marker": _VERSION_MARKER}, override=path)
+    except Exception:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def remeasure(path: str | None = None, limit: int | None = None, progress=None) -> int:
+    """Recompute the metrics of roasts measured by an older version.
+
+    The curve is already stored, so nothing needs re-importing and nothing is
+    read from anybody's disk: the roast is rebuilt from its own samples, measured
+    again, and written back. What the roaster typed is untouched.
+    """
+    statement = ("SELECT uid FROM roasts WHERE data NOT LIKE :marker ORDER BY date")
+    ids = [row[0] for row in db.rows(statement, {"marker": _VERSION_MARKER}, override=path)]
+    if limit:
+        ids = ids[:limit]
+
+    done = 0
+    for position, roast_id in enumerate(ids):
+        stored = db.one("SELECT data FROM roasts WHERE uid = :id", {"id": roast_id},
+                        override=path)
+        if not stored:
+            continue
+        row = json.loads(stored[0])
+        rebuilt = roast_dict(roast_id, path)
+        if rebuilt:
+            row.update(curve_metrics(rebuilt))
+        row["metrics_version"] = METRICS_VERSION
+        db.run("UPDATE roasts SET data = :data WHERE uid = :id",
+               {"data": json.dumps({k: _plain(v) for k, v in row.items()}), "id": roast_id},
+               override=path)
+        done += 1
+        if progress:
+            progress(position + 1, len(ids))
+    return done
 
 
 def load_curve(roast_id: str, path: str | None = None) -> pd.DataFrame:

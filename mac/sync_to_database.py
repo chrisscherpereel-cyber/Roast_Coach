@@ -146,6 +146,15 @@ def sync_once(folder: Path, database: str | None) -> dict:
         print(f"{time.strftime('%H:%M')}  " +
               ", ".join(f"{count} {kind}(s)" for kind, count in sorted(companions.items())))
 
+    # Roasts measured by an older version of the app still carry its numbers.
+    # Nothing needs re-importing — the curves are stored — so put them right here,
+    # where nobody is waiting for it.
+    behind = store.outdated()
+    if behind:
+        print(f"{time.strftime('%H:%M')}  re-measuring {behind} roast(s) with the "
+              f"current calculations…")
+        store.remeasure()
+
     known = store.known_sources()
     files = gather(folder, known)
     if not files:

@@ -55,6 +55,17 @@ RAPID_DRYING_PERCENT = DRYING_BAND[0]
 # as 24.6% is never described as "past 25%".
 SHOWN_DECIMALS = 1
 
+# Bumped whenever a change here would give a stored roast different numbers.
+# Metrics are worked out once, at import, and kept with the roast — so without a
+# stamp, a correction like the phase-share fix would only reach roasts imported
+# after it. store.remeasure() recomputes anything left behind.
+#
+# 1  the original
+# 2  2026-08-26: phase shares measured from charge rather than the turning point;
+#    thresholds judged at the precision shown; yellowing rate of rise uses the
+#    temperature yellowing actually happened at.
+METRICS_VERSION = 2
+
 FLAG_COLUMNS = [
     "flagRoRCrash", "flagRoRFlick", "flagStall", "flagLateHeat",
     "flagExcessiveDevelopment", "flagRapidDrying", "flagCount", "flagSummary",
