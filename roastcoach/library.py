@@ -72,6 +72,11 @@ BEAN_FIELDS = {
 }
 
 
+# What this file can do — see the note in store.py. 2 adds enrich_many(),
+# tables(), bean_labels() and link_report().
+VERSION = 2
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 

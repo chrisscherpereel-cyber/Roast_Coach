@@ -53,6 +53,14 @@ NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
 TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
           "effects", "rule_stats", "sources", "reference")
 
+# What this file can do, for a deploy that updated some files and not others.
+# app.py says which version it needs and names anything older on screen instead
+# of failing three pages in. Raise it whenever app.py starts calling something
+# new here.
+#   1  the original      2  fingerprint(), summary(frame=)
+#   3  outdated() / remeasure(), the bean as the coffee's identity
+VERSION = 3
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")

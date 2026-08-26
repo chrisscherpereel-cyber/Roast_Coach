@@ -40,6 +40,10 @@ TARGETS = {
 
 TOLERANCE = 0.35  # a prediction counts as met within this share of the intended move
 
+# What this file can do — see the note in store.py. 2 reads the phase bands from
+# metrics.py and judges them at the precision shown.
+VERSION = 2
+
 
 def _value(row, name, default=np.nan):
     value = row.get(name, default)

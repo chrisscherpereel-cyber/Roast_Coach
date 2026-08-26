@@ -476,26 +476,44 @@ os.environ.pop("ROAST_COACH_PAGE", None)
 # behind, not die with a redacted AttributeError three pages in.
 from roastcoach import metrics as _metrics_module  # noqa: E402
 
-_held = {"store.fingerprint": store.fingerprint,
-         "library.enrich_many": library.enrich_many,
-         "metrics.phase_shares": _metrics_module.phase_shares}
-del store.fingerprint
+# Every page, against a roastcoach/ that is one build behind app.py — which is
+# what a hand-copied cloud deploy actually looks like. Each of the three real
+# failures was a different missing function, so nothing here probes for a
+# function by name: the modules carry a version, and everything app.py asks of a
+# newer one goes through a guard.
+_missing = ("fingerprint", "outdated", "remeasure")
+_held = {name: getattr(store, name) for name in _missing}
+_held["library.enrich_many"] = library.enrich_many
+_held["library.link_report"] = library.link_report
+_held["metrics.phase_shares"] = _metrics_module.phase_shares
+_versions = (store.VERSION, library.VERSION, _metrics_module.VERSION)
+for name in _missing:
+    delattr(store, name)
 del library.enrich_many
+del library.link_report
 del _metrics_module.phase_shares
+store.VERSION = library.VERSION = _metrics_module.VERSION = 1
 try:
-    half = AppTest.from_file("app.py", default_timeout=120)
-    half.session_state[auth.SESSION_KEY] = "tester"
-    half.run()
-    detail = "" if not half.exception else str(half.exception[0].message).strip().splitlines()[-1]
-    check(not half.exception, "a half-updated deploy still runs", detail)
+    for page in ("Coach", "Roasts", "Coffees", "Learning", "Data"):
+        os.environ["ROAST_COACH_PAGE"] = page
+        half = AppTest.from_file("app.py", default_timeout=120)
+        half.session_state[auth.SESSION_KEY] = "tester"
+        half.run()
+        detail = ("" if not half.exception
+                  else str(half.exception[0].message).strip().splitlines()[-1])
+        check(not half.exception, f"the {page} page survives a half-updated deploy", detail)
     named = " ".join(caption.value for caption in half.caption)
     check(all(part in named for part in
               ("roastcoach/store.py", "roastcoach/library.py", "roastcoach/metrics.py")),
-          "and names every file that is behind")
+          "and every file that is behind is named on screen")
 finally:
-    store.fingerprint = _held["store.fingerprint"]
+    os.environ.pop("ROAST_COACH_PAGE", None)
+    for name in _missing:
+        setattr(store, name, _held[name])
     library.enrich_many = _held["library.enrich_many"]
+    library.link_report = _held["library.link_report"]
     _metrics_module.phase_shares = _held["metrics.phase_shares"]
+    store.VERSION, library.VERSION, _metrics_module.VERSION = _versions
 
 store.clear()
 empty = AppTest.from_file("app.py", default_timeout=120)

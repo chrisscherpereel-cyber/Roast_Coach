@@ -35,14 +35,32 @@ def load(token) -> pd.DataFrame:
 
 
 # Updating a cloud app means copying several files, and copying only some of them
-# is easy to do. Check on the way in which ones are behind, so the app says so in
-# the sidebar and keeps working, rather than dying with a redacted AttributeError
-# three pages later.
-STALE = [name for name, module, attribute in
-         (("roastcoach/store.py", store, "fingerprint"),
-          ("roastcoach/library.py", library, "enrich_many"),
-          ("roastcoach/metrics.py", metric_rules, "phase_shares"))
-         if not hasattr(module, attribute)]
+# is easy to do — it happened three times in one afternoon, each time as a
+# redacted AttributeError pointing at whichever function had not arrived yet.
+#
+# So each of Roast Coach's own modules carries a VERSION, this is the version
+# app.py needs, and anything older is named on screen and worked around. Probing
+# for one function per file was the earlier attempt, and it only ever caught the
+# function I happened to think of.
+NEEDS = (("roastcoach/store.py", store, 3),
+         ("roastcoach/library.py", library, 2),
+         ("roastcoach/metrics.py", metric_rules, 2),
+         ("roastcoach/coach.py", coach, 2))
+
+STALE = [name for name, module, wanted in NEEDS
+         if getattr(module, "VERSION", 0) < wanted]
+
+
+def optional(module, name, *args, default=None, **kwargs):
+    """Call something a newer version of that module has, if this copy has it.
+
+    Everything app.py asks of a module that older copies lack goes through here,
+    so a half-updated deploy loses that one feature rather than the page.
+    """
+    function = getattr(module, name, None)
+    if function is None:
+        return default
+    return function(*args, **kwargs)
 
 
 def phase_shares(total_minutes, yellow_minutes, crack_minutes) -> dict:
@@ -71,9 +89,8 @@ def phase_shares(total_minutes, yellow_minutes, crack_minutes) -> dict:
 
 def signature() -> tuple:
     """How much is stored — from store.py, or worked out here if that file is old."""
-    reader = getattr(store, "fingerprint", None)
-    if reader is not None:
-        return reader()
+    if hasattr(store, "fingerprint"):
+        return store.fingerprint()
     try:
         row = db.one("SELECT COUNT(*), MAX(imported_at) FROM roasts")
         return tuple("" if value is None else str(value) for value in (row or ()))
@@ -1021,7 +1038,7 @@ def page_data():
     # A roast's numbers are worked out once, at import, and kept with it. When a
     # calculation is corrected, the roasts already in the database still carry the
     # old answer until they are measured again — so say so, and offer to do it.
-    behind = store.outdated()
+    behind = optional(store, "outdated", default=0) or 0
     if behind:
         st.info(
             f"**{behind} roast(s) were measured by an earlier version of the app.** "
@@ -1030,7 +1047,8 @@ def page_data():
             "here, so they can simply be measured again.", icon=":material/calculate:")
         if st.button("Bring them up to date", type="primary"):
             bar = st.progress(0.0, text="Measuring…")
-            done = store.remeasure(
+            done = optional(
+                store, "remeasure", default=0,
                 progress=lambda position, total: bar.progress(
                     position / max(total, 1), text=f"Measuring… {position} of {total}"))
             bar.empty()
@@ -1043,9 +1061,9 @@ def page_data():
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a
     # roast quietly fall back to a name read off its title.
-    if not frame.empty:
+    link = None if frame.empty else optional(library, "link_report", frame.to_dict("records"))
+    if link:
         st.markdown("### Which bean each roast is grouped under")
-        link = library.link_report(frame.to_dict("records"))
         missing = sum(link["missing"].values())
         counted = st.columns(3)
         counted[0].metric("Matched a bean file", link["matched"])

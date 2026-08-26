@@ -66,6 +66,10 @@ SHOWN_DECIMALS = 1
 #    temperature yellowing actually happened at.
 METRICS_VERSION = 2
 
+# What this file can do — see the note in store.py. 2 adds phase_shares() and the
+# shared bands.
+VERSION = 2
+
 FLAG_COLUMNS = [
     "flagRoRCrash", "flagRoRFlick", "flagStall", "flagLateHeat",
     "flagExcessiveDevelopment", "flagRapidDrying", "flagCount", "flagSummary",
