@@ -421,7 +421,9 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
 
     # Whatever the bean, recipe and machine files add. Only columns that were
     # actually found appear, so nothing changes for a folder of roasts alone.
-    extra = library.enrich_many(roasts.to_dict("records"), path)
+    rows = roasts.to_dict("records")
+    joined = getattr(library, "enrich_many", None)     # an older library.py still works
+    extra = joined(rows, path) if joined else [library.enrich(row, path) for row in rows]
     for column in sorted({key for found in extra for key in found}):
         values = [found.get(column) for found in extra]
         if column in roasts.columns:

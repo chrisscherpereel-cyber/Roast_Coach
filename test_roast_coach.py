@@ -322,6 +322,22 @@ for page in ("Coach", "Roasts", "Coffees", "Learning", "Data"):
     check(not opened.exception, f"the {page} page renders with roasts loaded", detail)
 os.environ.pop("ROAST_COACH_PAGE", None)
 
+# A cloud deploy is several files copied by hand, and copying only some of them is
+# easy to do. An older roastcoach/ next to a newer app.py must say which file is
+# behind, not die with a redacted AttributeError three pages in.
+_fingerprint = store.fingerprint
+del store.fingerprint
+try:
+    half = AppTest.from_file("app.py", default_timeout=120)
+    half.session_state[auth.SESSION_KEY] = "tester"
+    half.run()
+    detail = "" if not half.exception else str(half.exception[0].message).strip().splitlines()[-1]
+    check(not half.exception, "a half-updated deploy still runs", detail)
+    check(any("roastcoach/store.py" in caption.value for caption in half.caption),
+          "and names the file that is behind")
+finally:
+    store.fingerprint = _fingerprint
+
 store.clear()
 empty = AppTest.from_file("app.py", default_timeout=120)
 empty.session_state[auth.SESSION_KEY] = "tester"

@@ -33,6 +33,28 @@ def load(token) -> pd.DataFrame:
     return store.load_roasts()
 
 
+# Updating a cloud app means copying several files, and copying only some of them
+# is easy to do. Check on the way in which ones are behind, so the app says so in
+# the sidebar and keeps working, rather than dying with a redacted AttributeError
+# three pages later.
+STALE = [name for name, module, attribute in
+         (("roastcoach/store.py", store, "fingerprint"),
+          ("roastcoach/library.py", library, "enrich_many"))
+         if not hasattr(module, attribute)]
+
+
+def signature() -> tuple:
+    """How much is stored — from store.py, or worked out here if that file is old."""
+    reader = getattr(store, "fingerprint", None)
+    if reader is not None:
+        return reader()
+    try:
+        row = db.one("SELECT COUNT(*), MAX(imported_at) FROM roasts")
+        return tuple("" if value is None else str(value) for value in (row or ()))
+    except Exception:
+        return ()
+
+
 def token():
     """What the cached table was read at.
 
@@ -41,7 +63,7 @@ def token():
     first of those can clear a cache. So the key is a one-query signature of what
     is actually stored — when that moves, the table is read again by itself.
     """
-    return (store.fingerprint(), st.session_state.get("data_token", 0))
+    return (signature(), st.session_state.get("data_token", 0))
 
 
 def refresh():
@@ -165,6 +187,9 @@ def account_strip(user: str):
         st.caption(db.describe())
         if not db.is_shared():
             st.caption(":orange[This computer only — see the README to share a database.]")
+        if STALE:
+            st.caption(":orange[Update " + ", ".join(STALE) +
+                       " — this deploy has an older copy than app.py expects.]")
         if st.button("Sign out", use_container_width=True):
             auth.sign_out()
             st.rerun()
@@ -174,7 +199,7 @@ def empty_state(message: str):
     # A page with nothing on it while the database is full of roasts is the most
     # confusing thing the app can do. Count the rows before saying there are none.
     try:
-        stored = store.fingerprint()
+        stored = signature()
         held = int(stored[0]) if stored and stored[0] else 0
     except Exception:
         held = 0
@@ -729,7 +754,10 @@ def _report_line(report: dict) -> str:
 def page_data():
     brand_header("Where your roasts come from")
     frame = roasts()
-    info = store.summary(frame=frame)
+    try:
+        info = store.summary(frame=frame)
+    except TypeError:                     # an older store.py in a half-updated deploy
+        info = store.summary()
 
     columns = st.columns([1, 1, 1, 1, 1])
     columns[0].metric("Roasts", info["roasts"])
