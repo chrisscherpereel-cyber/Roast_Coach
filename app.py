@@ -14,7 +14,8 @@ import streamlit as st
 
 from roastcoach import auth, charts, coach, db, demo_data, learning, library, store
 from roastcoach.curves import create_roast_samples, roast_events
-from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS, phase_shares
+from roastcoach import metrics as metric_rules
+from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS
 from roastcoach.naming import label_for
 
 ASSETS = Path(__file__).parent / "assets"
@@ -39,8 +40,33 @@ def load(token) -> pd.DataFrame:
 # three pages later.
 STALE = [name for name, module, attribute in
          (("roastcoach/store.py", store, "fingerprint"),
-          ("roastcoach/library.py", library, "enrich_many"))
+          ("roastcoach/library.py", library, "enrich_many"),
+          ("roastcoach/metrics.py", metric_rules, "phase_shares"))
          if not hasattr(module, attribute)]
+
+
+def phase_shares(total_minutes, yellow_minutes, crack_minutes) -> dict:
+    """Drying, Maillard and development as shares of the roast, measured from charge.
+
+    Normally metrics.py's, so the flags, the rules and the screen cannot drift
+    apart. Worked out here only when this deploy's metrics.py is older than
+    app.py — the sidebar says so, and the numbers stay right meanwhile.
+    """
+    shared = getattr(metric_rules, "phase_shares", None)
+    if shared is not None:
+        return shared(total_minutes, yellow_minutes, crack_minutes)
+
+    try:
+        total = float(total_minutes)
+        yellow = float(yellow_minutes)
+        crack = float(crack_minutes)
+    except (TypeError, ValueError):
+        return {}
+    if not (total > 0) or pd.isna(yellow) or pd.isna(crack):
+        return {}
+    return {"drying": yellow / total * 100.0,
+            "maillard": (crack - yellow) / total * 100.0,
+            "development": (total - crack) / total * 100.0}
 
 
 def signature() -> tuple:

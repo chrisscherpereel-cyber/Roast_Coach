@@ -447,18 +447,28 @@ os.environ.pop("ROAST_COACH_PAGE", None)
 # A cloud deploy is several files copied by hand, and copying only some of them is
 # easy to do. An older roastcoach/ next to a newer app.py must say which file is
 # behind, not die with a redacted AttributeError three pages in.
-_fingerprint = store.fingerprint
+from roastcoach import metrics as _metrics_module  # noqa: E402
+
+_held = {"store.fingerprint": store.fingerprint,
+         "library.enrich_many": library.enrich_many,
+         "metrics.phase_shares": _metrics_module.phase_shares}
 del store.fingerprint
+del library.enrich_many
+del _metrics_module.phase_shares
 try:
     half = AppTest.from_file("app.py", default_timeout=120)
     half.session_state[auth.SESSION_KEY] = "tester"
     half.run()
     detail = "" if not half.exception else str(half.exception[0].message).strip().splitlines()[-1]
     check(not half.exception, "a half-updated deploy still runs", detail)
-    check(any("roastcoach/store.py" in caption.value for caption in half.caption),
-          "and names the file that is behind")
+    named = " ".join(caption.value for caption in half.caption)
+    check(all(part in named for part in
+              ("roastcoach/store.py", "roastcoach/library.py", "roastcoach/metrics.py")),
+          "and names every file that is behind")
 finally:
-    store.fingerprint = _fingerprint
+    store.fingerprint = _held["store.fingerprint"]
+    library.enrich_many = _held["library.enrich_many"]
+    _metrics_module.phase_shares = _held["metrics.phase_shares"]
 
 store.clear()
 empty = AppTest.from_file("app.py", default_timeout=120)

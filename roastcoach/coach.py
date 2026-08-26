@@ -27,9 +27,11 @@ from . import learning, metrics as metric_rules, store
 # every one of them can be overridden per coffee once a reference roast exists.
 # The two phase bands are the same objects the pattern checks use, so a flag and
 # a piece of advice cannot disagree about where the line is.
+# getattr, not attribute access: a deploy whose metrics.py is older than this
+# file still has to start. app.py notices and says which file is behind.
 TARGETS = {
-    "development_percent": metric_rules.DEVELOPMENT_BAND,
-    "drying_percent": metric_rules.DRYING_BAND,
+    "development_percent": getattr(metric_rules, "DEVELOPMENT_BAND", (18.0, 25.0)),
+    "drying_percent": getattr(metric_rules, "DRYING_BAND", (28.0, 40.0)),
     "turning_point_minutes": (0.8, 1.8),
     "total_minutes": (8.0, 14.0),
     "ror_at_first_crack": (3.0, 12.0),
@@ -48,7 +50,10 @@ def _value(row, name, default=np.nan):
     return value if np.isfinite(value) else np.nan
 
 
-def _shown(value, decimals: int = metric_rules.SHOWN_DECIMALS):
+SHOWN_DECIMALS = getattr(metric_rules, "SHOWN_DECIMALS", 1)
+
+
+def _shown(value, decimals: int = SHOWN_DECIMALS):
     """A measure at the precision the roaster sees it.
 
     Bands are judged on this rather than on the raw number, so a roast printed as
@@ -68,10 +73,20 @@ def _phase_percentages(row) -> dict:
     and with what the roast readout shows. Rounded to the decimal the roaster is
     shown, so a card never argues with the number printed above it.
     """
-    shares = metric_rules.phase_shares(_value(row, "totalRoastMinutes"),
-                                       _value(row, "yellowPointTime"),
-                                       _value(row, "firstCrackTime"))
-    return {name: round(value, metric_rules.SHOWN_DECIMALS) for name, value in shares.items()}
+    total = _value(row, "totalRoastMinutes")
+    yellow = _value(row, "yellowPointTime")
+    crack = _value(row, "firstCrackTime")
+
+    shared = getattr(metric_rules, "phase_shares", None)
+    if shared is not None:
+        shares = shared(total, yellow, crack)
+    elif np.isfinite(total) and total > 0:
+        shares = {"drying": yellow / total * 100, "maillard": (crack - yellow) / total * 100,
+                  "development": (total - crack) / total * 100}
+        shares = {name: value for name, value in shares.items() if np.isfinite(value)}
+    else:
+        shares = {}
+    return {name: round(value, SHOWN_DECIMALS) for name, value in shares.items()}
 
 
 def metric_value(row, metric: str):
