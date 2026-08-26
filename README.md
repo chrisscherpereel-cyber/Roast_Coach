@@ -83,10 +83,17 @@ one name, and the app can say what matched — so a version that names things di
 is a fixable observation rather than a silent blank.
 
 Both RoasTime formats are read: the per-roast JSON files, and the single-roast CSV export.
-Every roast is identified by **date and coffee**; the coffee is read from the roast name and
-you can correct it, along with origin, process, variety, weights, roast level, rating,
-cupping score and notes. There is also a **demo roasting history** so you can look around
-before importing anything.
+
+**Roasts are compared bean against bean.** The coffee on a roast is the bean RoasTime linked
+to it; only where no bean file matched does the app fall back to what you typed, and then to
+a name read out of the roast title. So "#12 CR 800 v4" and "Costa test 2nd" are one coffee
+if they were one bean, and trends, repeatability, effect sizes and the coach's next-roast
+advice all follow the bean. Type a different name on any roast of a bean and every roast of
+that bean takes it — a rename, not a split. The **Data** page says how many roasts matched a
+bean file and names the ids whose file has not arrived. Origin, process, variety, weights,
+roast level, rating, cupping score and notes are all yours to correct.
+
+There is also a **demo roasting history** so you can look around before importing anything.
 
 ---
 
@@ -128,9 +135,10 @@ happened when you took earlier advice.
 **Roasts** — every roast by date and coffee. Pick one for its profile chart, its numbers,
 its pattern checks, everything you have written about it, and the coach's read on it.
 
-**Coffees** — how a coffee is going: the trend of first crack, development and drop
-temperature; how repeatable your roasts of it are; and every roast's rate of rise
-overlaid, with your reference roast in front.
+**Coffees** — how a coffee is going, grouped by the **bean** RoasTime says was in the drum
+rather than by what the roast was called: the trend of first crack, development and drop
+temperature; how repeatable your roasts of it are; and every roast's rate of rise overlaid,
+with your reference roast in front.
 
 **Learning** — what the app has measured from your roasting, against what it assumed
 before it had your data, and how often each kind of advice has worked.
@@ -196,9 +204,16 @@ dropped early may be exactly what you meant.
 | Stall | rate of rise sits below 1.5 °C/min for over 45 s before first crack |
 | Late heat | power increased after first crack, or in the last fifth of the roast |
 | Long development | development ran past 25% of the roast |
-| Fast drying | drying took less than 25% of the roast |
+| Fast drying | drying took less than 28% of the roast |
 
-Thresholds are named constants at the top of `roastcoach/metrics.py`.
+Thresholds are named constants at the top of `roastcoach/metrics.py`, and the two phase
+bands are the *same objects* the coaching rules use — a pattern check and a piece of advice
+cannot disagree about where the line is.
+
+Every phase share is of the whole roast measured from charge, the way RoasTime shows it:
+drying is everything up to yellowing, and the three shares add to 100. Shares are also
+compared at the precision they are displayed at, so a roast shown as 24.6% development is
+never told it ran past 25%.
 
 ---
 

@@ -431,20 +431,46 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
         else:
             roasts[column] = values
 
-    # What the coffee is called, in order of how much it can be trusted: what the
-    # roaster typed, then the bean file RoasTime linked, then a guess scraped out
-    # of the roast name.
+    # What the coffee is called, in order of how much it can be trusted: the bean
+    # RoasTime says was in the drum, then what the roaster typed, then a guess
+    # scraped out of the roast name.
+    #
+    # The bean comes first on purpose. Roasts are compared bean against bean —
+    # trends, consistency, effect sizes, the coach's "next roast of this coffee"
+    # all group on this name — and a roast title is a label somebody typed that
+    # afternoon, not an identity. Two roasts of one bean called "CR 800 v4" and
+    # "Costa Rica test" are the same coffee and have to land in the same group.
+    # A typed name still wins wherever no bean file matched.
+    #
     # The country is guessed from the roast name only when nothing better exists:
     # a bean file that says Costa Rica must beat "Ethiopia" read out of a title.
     if "origin" in roasts:
         roasts["origin"] = roasts["origin"].fillna(roasts.get("origin_guess"))
 
     guess = roasts.get("coffee_guess", pd.Series("", index=roasts.index))
-    named = roasts.get("bean_name", pd.Series(np.nan, index=roasts.index))
-    roasts["coffee"] = (typed
-                        .fillna(named.replace("", np.nan))
+    named = roasts.get("bean_name", pd.Series(np.nan, index=roasts.index)).replace("", np.nan)
+    bean_id = roasts.get("bean_id", pd.Series(np.nan, index=roasts.index))
+
+    # Typing a coffee name on a roast that RoasTime linked to a bean renames that
+    # bean everywhere, rather than splitting one roast off from its own history.
+    # It is the only reading that keeps both promises: the roaster's own words
+    # win, and roasts of one bean stay together.
+    if bean_id.notna().any():
+        renames = (pd.DataFrame({"bean_id": bean_id, "typed": typed,
+                                 "at": roasts["roasted_at"]})
+                   .dropna(subset=["bean_id", "typed"])
+                   .sort_values("at")
+                   .groupby("bean_id")["typed"].last())
+        named = bean_id.map(renames).fillna(named)
+
+    roasts["coffee"] = (named
+                        .fillna(typed)
                         .fillna(guess).replace("", np.nan)
                         .fillna("Unnamed coffee"))
+    # Where the name came from, so the app can say why two roasts are together.
+    roasts["coffee_source"] = np.where(
+        bean_id.notna(), "bean file",
+        np.where(typed.notna(), "typed", "roast name"))
 
     roasts["label"] = [roast_label(row) for _, row in roasts.iterrows()]
 

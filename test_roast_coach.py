@@ -149,6 +149,49 @@ unlinked = joined[joined["uid"] != "linked-roast"]
 check(not unlinked.empty and unlinked.iloc[0]["coffee"] != bean["name"],
       "a roast with no bean id is left exactly as it was")
 
+# Roasts are compared bean against bean. Two roasts of one bean carrying quite
+# different titles have to land in one group, and the roast title must never
+# split them.
+pair = demo_data.history(weeks=3, seed=77)[:2]
+for position, roast in enumerate(pair):
+    roast["uid"] = roast["guid"] = f"same-bean-{position}"
+    roast["beanId"] = "bean-1"
+pair[0]["roastName"] = "#12 CR 800 v4"
+pair[1]["roastName"] = "Ethiopia test 2nd"          # a title that guesses wrongly
+store.add_roasts(demo_data.as_files(pair))
+grouped = store.load_roasts()
+mine = grouped[grouped["uid"].str.startswith("same-bean")]
+check(len(mine) == 2 and mine["coffee"].nunique() == 1,
+      "two roasts of one bean group together whatever their titles say",
+      " / ".join(sorted(set(mine["coffee"]))))
+check(set(mine["coffee_source"]) == {"bean file"},
+      "and the app can say the bean is why they are together")
+
+# Typing a name on one of them renames the bean, rather than splitting that roast
+# off from its own history.
+store.save_notes("same-bean-0", {"coffee": "Tarrazú lot 7"})
+renamed_frame = store.load_roasts()
+mine = renamed_frame[renamed_frame["uid"].str.startswith("same-bean")]
+check(set(mine["coffee"]) == {"Tarrazú lot 7"},
+      "renaming one roast of a bean renames every roast of that bean")
+store.save_notes("same-bean-0", {"coffee": ""})
+store.forget(["same-bean-0", "same-bean-1"])
+
+# Two beans that happen to share a name are still two coffees.
+library.add_records("bean", [
+    {"name": "a.json", "text": _json.dumps({"id": "lot-a", "name": "Ethiopia Guji"})},
+    {"name": "b.json", "text": _json.dumps({"id": "lot-b", "name": "Ethiopia Guji"})}])
+labels = library.bean_labels(library.tables()["bean"])
+check(labels["lot-a"] != labels["lot-b"] and labels["lot-a"].startswith("Ethiopia Guji"),
+      "two lots under one name stay apart", f"{labels['lot-a']} / {labels['lot-b']}")
+
+link = library.link_report(joined.to_dict("records"))
+accounted = link["matched"] + link["no_id"] + sum(link["missing"].values())
+check(link["matched"] == 1 and accounted == link["roasts"],
+      "and the Data page can account for every roast: matched, no file, or no bean id",
+      f"{link['matched']} matched, {sum(link['missing'].values())} without their file, "
+      f"{link['no_id']} with no bean id")
+
 # The join is done once for the whole table rather than once per roast — five
 # hundred roasts asking one at a time is fifteen hundred round trips.
 rows = joined.to_dict("records")
@@ -178,6 +221,85 @@ store.add_roasts(demo_data.as_files(extra))
 check(store.fingerprint() != before,
       "and moves when a roast arrives, so a held table is read again")
 store.forget(["outside-roast"])
+
+print("\nTHE ARITHMETIC — a roast with no unknowns")
+from roastcoach.metrics import curve_metrics as _curve_metrics, phase_shares  # noqa: E402
+
+# 500 s at 1 Hz. Yellowing marked at 175 s, first crack at 377 s. So the roast is
+# 8.3333 min, drying 35.0%, Maillard 40.4%, development exactly 24.6% — the case
+# that used to be flagged for running past 25%, because the flag measured its
+# share from the turning point while the screen measured it from charge.
+_END, _TURN, _YELLOW, _CRACK = 500, 30, 175, 377
+_drum = [190.0 - 100.0 * (t / _TURN) if t <= _TURN
+         else 90.0 + 120.0 * ((t - _TURN) / (_END - _TURN)) for t in range(_END + 1)]
+_worked = {
+    "uid": "worked", "roastName": "Worked example", "sampleRate": 1.0,
+    "beanTemperature": [t - 12.0 for t in _drum], "drumTemperature": _drum,
+    "roastStartIndex": 0, "roastEndIndex": _END, "totalRoastTime": _END,
+    "indexYellowingStart": _YELLOW, "indexFirstCrackStart": _CRACK,
+    "drumChargeTemperature": 190.0, "drumDropTemperature": 210.0,
+    "beanDropTemperature": 198.0, "weightGreen": 800.0, "weightRoasted": 680.0,
+    "actions": {"actionTimeList": [
+        {"ctrlType": 0, "index": 0, "value": 9}, {"ctrlType": 1, "index": 0, "value": 2},
+        {"ctrlType": 2, "index": 0, "value": 9},
+        {"ctrlType": 0, "index": _YELLOW, "value": 7}, {"ctrlType": 1, "index": _YELLOW, "value": 3},
+        {"ctrlType": 0, "index": _CRACK, "value": 5}, {"ctrlType": 1, "index": _CRACK, "value": 4},
+    ]},
+}
+_m = _curve_metrics(_worked)
+_fc = _drum[_CRACK]
+_hand = {
+    "totalRoastMinutes": _END / 60, "turningPointTime": _TURN / 60,
+    "yellowPointTime": _YELLOW / 60, "firstCrackTime": _CRACK / 60,
+    "developmentTime": (_END - _CRACK) / 60,
+    "yellowingPhaseTime": (_YELLOW - _TURN) / 60,
+    "browningPhaseTime": (_CRACK - _YELLOW) / 60,
+    "weightLostPercent": 15.0, "Drop-ChargeDeltaTemp": 20.0, "deltaIBTS-BT-atDrop": 12.0,
+    "firstCrackTemp": _fc, "tempRiseAfterFirstCrack": 210.0 - _fc,
+    "RoR-development-est": (210.0 - _fc) / ((_END - _CRACK) / 60),
+    "RoR-browning-est": (_fc - _drum[_YELLOW]) / ((_CRACK - _YELLOW) / 60),
+    "RoR-yellowing-est": (_drum[_YELLOW] - 90.0) / ((_YELLOW - _TURN) / 60),
+    "temp/time": 210.0 / _END, "time/temp": _END / 210.0,
+    "powerCharge": 9.0, "powerDrying": 9.0, "powerMaillard": 7.0, "powerDevelopment": 5.0,
+    "fanCharge": 2.0, "fanDrying": 2.0, "fanMaillard": 3.0, "fanDevelopment": 4.0,
+    "drumMean": 9.0, "powerAtFirstCrack": 5.0, "fanAtFirstCrack": 4.0,
+    "powerChanges": 3, "fanChanges": 3, "drumChanges": 1,
+}
+_wrong = [name for name, want in _hand.items()
+          if not (_m.get(name) is not None and abs(float(_m[name]) - float(want)) < 1e-6)]
+check(not _wrong, f"all {len(_hand)} measures match the arithmetic done by hand",
+      ", ".join(_wrong))
+
+_shares = phase_shares(_m["totalRoastMinutes"], _m["yellowPointTime"], _m["firstCrackTime"])
+check(abs(_shares["drying"] - 35.0) < 1e-9 and abs(_shares["development"] - 24.6) < 1e-9,
+      "phase shares are of the whole roast, from charge",
+      f"drying {_shares['drying']:.1f}%, development {_shares['development']:.1f}%")
+check(abs(sum(_shares.values()) - 100.0) < 1e-9, "and the three of them add to 100")
+check(not _m["flagExcessiveDevelopment"],
+      "a roast shown as 24.6% development is not flagged for passing 25%")
+check(not _m["flagRapidDrying"], "and 35% drying is not called fast")
+
+# The line the flag draws and the line the advice draws are the same line.
+from roastcoach import metrics as _metrics  # noqa: E402
+
+check(coach.TARGETS["development_percent"] is _metrics.DEVELOPMENT_BAND
+      and coach.TARGETS["drying_percent"] is _metrics.DRYING_BAND,
+      "the pattern checks and the advice read one band, not two copies",
+      str(coach.TARGETS["development_percent"]))
+_row = dict(_m)
+_row["weightLossPercent"] = 15.0
+check(coach.metric_value(_row, "development_percent") == 24.6,
+      "the coach reads the same 24.6% the roast page prints")
+_advice = [rule(_row, {"targets": coach.TARGETS, "reference": None}) for rule in coach.RULES]
+_names = [item["rule_id"] for item in _advice if item]
+check("development_long" not in _names and "drying_fast" not in _names,
+      "and gives no advice about a phase that is inside its band", ", ".join(_names) or "none")
+
+# One second later past first crack and it should say so — at the precision shown.
+_late = dict(_worked, indexFirstCrackStart=372)          # development 25.6%
+_late_m = _curve_metrics(_late)
+check(_late_m["flagExcessiveDevelopment"], "a roast at 25.6% is flagged",
+      f"{phase_shares(_late_m['totalRoastMinutes'], _late_m['yellowPointTime'], _late_m['firstCrackTime'])['development']:.1f}%")
 
 print("\nCURVES")
 first = frame.iloc[0]

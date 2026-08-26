@@ -41,8 +41,19 @@ FLICK_RISE_PER_MINUTE = 1.5      # °C/min regained after a crash
 STALL_ROR = 1.5                  # °C/min the roast must stay above before first crack
 STALL_SECONDS = 45.0             # how long it has to sit there to count
 LATE_HEAT_TAIL = 0.20            # a power increase in the last fifth of the roast
-EXCESSIVE_DEVELOPMENT_PERCENT = 25.0
-RAPID_DRYING_PERCENT = 25.0
+
+# What a roast is steered toward, as a share of the whole roast measured from
+# charge — the way RoasTime shows it, and the way the readout and the phase bar
+# show it. The flags and the coaching rules both read these, so a pattern check
+# and a piece of advice can never disagree about where the line is.
+DEVELOPMENT_BAND = (18.0, 25.0)
+DRYING_BAND = (28.0, 40.0)
+EXCESSIVE_DEVELOPMENT_PERCENT = DEVELOPMENT_BAND[1]
+RAPID_DRYING_PERCENT = DRYING_BAND[0]
+
+# Shares are compared at the precision they are shown at, so a roast displayed
+# as 24.6% is never described as "past 25%".
+SHOWN_DECIMALS = 1
 
 FLAG_COLUMNS = [
     "flagRoRCrash", "flagRoRFlick", "flagStall", "flagLateHeat",
@@ -73,7 +84,8 @@ FLAG_EXPLANATIONS = {
 
 METRIC_COLUMNS = [
     "indexTurningPoint", "turningPointTime", "turningPointBeanTemp", "ibtsTurningPointTemp",
-    "index165PT", "yellowPointTime", "yellowPointTemp165", "yellowPointSource",
+    "index165PT", "yellowPointTime", "yellowPointTemp165", "yellowPointTemp",
+    "yellowPointSource",
     "firstCrackTime", "firstCrackTemp", "firstCrackBeanTemp",
     "peakROR", "peakRORTime", "peakIbtsROR", "peakIbtsRORTime",
     "totalRoastMinutes", "weightLostPercent",
@@ -87,6 +99,43 @@ METRIC_COLUMNS = [
     "fanCharge", "fanDrying", "fanMaillard", "fanDevelopment", "drumMean",
     "powerAtFirstCrack", "fanAtFirstCrack",
 ] + FLAG_COLUMNS
+
+
+def _as_shown(value):
+    """The value as the roaster sees it — what every threshold is judged against."""
+    if value is None:
+        return np.nan
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return round(value, SHOWN_DECIMALS) if np.isfinite(value) else np.nan
+
+
+def phase_shares(total_minutes, yellow_minutes, crack_minutes) -> dict:
+    """Drying, Maillard and development as shares of the roast, measured from charge.
+
+    The single definition. RoasTime measures its phase percentages from charge —
+    0:00 is the moment the beans go in — so drying is everything up to yellowing,
+    including the dip to the turning point, and the three shares add to 100.
+    """
+    try:
+        total = float(total_minutes)
+    except (TypeError, ValueError):
+        return {}
+    if not np.isfinite(total) or total <= 0:
+        return {}
+
+    shares = {}
+    yellow = float(yellow_minutes) if yellow_minutes is not None else np.nan
+    crack = float(crack_minutes) if crack_minutes is not None else np.nan
+    if np.isfinite(yellow):
+        shares["drying"] = yellow / total * 100.0
+    if np.isfinite(yellow) and np.isfinite(crack):
+        shares["maillard"] = (crack - yellow) / total * 100.0
+    if np.isfinite(crack):
+        shares["development"] = (total - crack) / total * 100.0
+    return shares
 
 
 def _series(roast_json: dict, *names) -> pd.Series:
@@ -234,13 +283,13 @@ def roast_dynamics(drum_ror: pd.Series, sample_rate: float, points: dict, metric
             result["flagLateHeat"] = True
             reasons.append(FLAG_LABELS["flagLateHeat"])
 
-    development_percent = metrics.get("_developmentPercent")
+    development_percent = _as_shown(metrics.get("_developmentPercent"))
     if development_percent is not None and np.isfinite(development_percent) \
             and development_percent > EXCESSIVE_DEVELOPMENT_PERCENT:
         result["flagExcessiveDevelopment"] = True
         reasons.append(FLAG_LABELS["flagExcessiveDevelopment"])
 
-    drying_percent = metrics.get("_dryingPercent")
+    drying_percent = _as_shown(metrics.get("_dryingPercent"))
     if drying_percent is not None and np.isfinite(drying_percent) \
             and drying_percent < RAPID_DRYING_PERCENT:
         result["flagRapidDrying"] = True
@@ -288,6 +337,10 @@ def curve_metrics(roast_json: dict) -> dict:
         yellow_index = metrics["index165PT"]
         metrics["yellowPointSource"] = "auto-165" if np.isfinite(yellow_index) else None
     metrics["yellowPointTime"] = _minutes(yellow_index, sample_rate)
+    # The drum temperature where yellowing actually was. When the roaster marked
+    # it, that is rarely 165 °C, and the phase rate-of-rise estimates should use
+    # the temperature the roast really passed through rather than the convention.
+    metrics["yellowPointTemp"] = _at(drum, yellow_index)
 
     # --- first crack ---
     first_crack_index = roast_json.get("indexFirstCrackStart") or 0
@@ -353,15 +406,21 @@ def curve_metrics(roast_json: dict) -> dict:
         metrics["developmentTime"] = total_minutes - crack
 
     # --- straight-line rate of rise across each phase (°C/min) ---
+    # The temperature yellowing was actually at, falling back to the 165 °C
+    # convention only when nothing better is known.
+    yellow_temp = metrics["yellowPointTemp"]
+    if not np.isfinite(yellow_temp):
+        yellow_temp = YELLOW_POINT_TEMPERATURE
+
     yellowing_phase = metrics["yellowingPhaseTime"]
     if np.isfinite(yellowing_phase) and yellowing_phase > 0 and np.isfinite(metrics["ibtsTurningPointTemp"]):
         metrics["RoR-yellowing-est"] = (
-            YELLOW_POINT_TEMPERATURE - metrics["ibtsTurningPointTemp"]
+            yellow_temp - metrics["ibtsTurningPointTemp"]
         ) / yellowing_phase
 
     browning_phase = metrics["browningPhaseTime"]
     if np.isfinite(browning_phase) and browning_phase > 0 and np.isfinite(metrics["firstCrackTemp"]):
-        metrics["RoR-browning-est"] = (metrics["firstCrackTemp"] - YELLOW_POINT_TEMPERATURE) / browning_phase
+        metrics["RoR-browning-est"] = (metrics["firstCrackTemp"] - yellow_temp) / browning_phase
 
     development = metrics["developmentTime"]
     if np.isfinite(development) and development > 0 and np.isfinite(drum_drop) and np.isfinite(metrics["firstCrackTemp"]):
@@ -371,10 +430,13 @@ def curve_metrics(roast_json: dict) -> dict:
         metrics["RoR-fullRoast-est"] = (drum_drop - metrics["ibtsTurningPointTemp"]) / (total_minutes - turning)
 
     # --- dynamics, control activity and the pattern checks ---
-    span = np.nansum([metrics["yellowingPhaseTime"], metrics["browningPhaseTime"],
-                      metrics["developmentTime"]])
-    metrics["_dryingPercent"] = (metrics["yellowingPhaseTime"] / span * 100) if span > 0 else np.nan
-    metrics["_developmentPercent"] = (metrics["developmentTime"] / span * 100) if span > 0 else np.nan
+    # Phase shares are of the whole roast, from charge — not from the turning
+    # point. Measuring from the turning point makes every share a percent or two
+    # larger, which is how a roast shown as 24.6% development came to be flagged
+    # for running past 25%.
+    shares = phase_shares(total_minutes, yellow, crack)
+    metrics["_dryingPercent"] = shares.get("drying", np.nan)
+    metrics["_developmentPercent"] = shares.get("development", np.nan)
 
     points = {
         "turning": metrics["indexTurningPoint"],

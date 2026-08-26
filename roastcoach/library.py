@@ -171,14 +171,42 @@ OTHER_KINDS = (("recipe", "recipe_name"), ("container", "machine_name"),
                ("userProfile", "roasted_by"))
 
 
-def _enrich_one(roast_row: dict, tables: dict) -> dict:
+def bean_labels(beans: dict) -> dict:
+    """``{id: what to call this bean}``, unique across the whole library.
+
+    Roasts are compared bean by bean, so the label has to identify one bean and
+    not merely describe it. Two lots of "Ethiopia Guji" bought a year apart are
+    different coffees; when RoasTime holds them as two records with one name,
+    each keeps a short piece of its own id so they stay apart.
+    """
+    names: dict[str, str] = {}
+    for ref_id, record in beans.items():
+        names[ref_id] = _first(record, NAME_KEYS) or ref_id
+
+    seen: dict[str, list[str]] = {}
+    for ref_id, name in names.items():
+        seen.setdefault(name, []).append(ref_id)
+    for name, ids in seen.items():
+        if len(ids) < 2:
+            continue
+        # The tail of the id, not the head: RoasTime ids often share a prefix,
+        # and a suffix that is still ambiguous falls back to the whole id.
+        tails = {ref_id: str(ref_id)[-4:] for ref_id in ids}
+        distinct = len(set(tails.values())) == len(ids)
+        for ref_id in ids:
+            names[ref_id] = f"{name} · {tails[ref_id] if distinct else ref_id}"
+    return names
+
+
+def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None) -> dict:
     found: dict = {}
 
     bean_id = link_id(roast_row, "bean")
     if bean_id:
         bean = tables.get("bean", {}).get(bean_id)
         if bean:
-            found["bean_name"] = _first(bean, NAME_KEYS)
+            found["bean_id"] = bean_id
+            found["bean_name"] = (labels or {}).get(bean_id) or _first(bean, NAME_KEYS)
             for column, keys in BEAN_FIELDS.items():
                 value = _first(bean, keys)
                 if value is not None:
@@ -219,7 +247,30 @@ def enrich_many(roast_rows, path: str | None = None) -> list[dict]:
     if not rows:
         return []
     loaded = tables(path)
-    return [_enrich_one(row, loaded) for row in rows]
+    labels = bean_labels(loaded.get("bean", {}))
+    return [_enrich_one(row, loaded, labels) for row in rows]
+
+
+def link_report(roast_rows, path: str | None = None) -> dict:
+    """How the roasts and the bean files line up — for the Data page.
+
+    A roast grouped under the wrong heading is nearly always one of three things,
+    and this says which: it carries no bean id at all, it points at a bean whose
+    file has not been synced, or it matched.
+    """
+    rows = list(roast_rows)
+    beans = tables(path).get("bean", {})
+    report = {"roasts": len(rows), "matched": 0, "no_id": 0,
+              "missing": {}, "beans": len(beans)}
+    for row in rows:
+        bean_id = link_id(row, "bean")
+        if not bean_id:
+            report["no_id"] += 1
+        elif bean_id in beans:
+            report["matched"] += 1
+        else:
+            report["missing"][bean_id] = report["missing"].get(bean_id, 0) + 1
+    return report
 
 
 def enrich(roast_row: dict, path: str | None = None) -> dict:
@@ -234,6 +285,7 @@ def enrich(roast_row: dict, path: str | None = None) -> dict:
     if bean_id:
         bean = record("bean", bean_id, path)
         if bean:
+            found["bean_id"] = bean_id
             found["bean_name"] = _first(bean, NAME_KEYS)
             for column, keys in BEAN_FIELDS.items():
                 value = _first(bean, keys)

@@ -14,7 +14,7 @@ import streamlit as st
 
 from roastcoach import auth, charts, coach, db, demo_data, learning, library, store
 from roastcoach.curves import create_roast_samples, roast_events
-from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS
+from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS, phase_shares
 from roastcoach.naming import label_for
 
 ASSETS = Path(__file__).parent / "assets"
@@ -423,11 +423,14 @@ def phase_bar(row):
     if not (total > 0 and 0 < yellow < crack < total):
         return
 
-    spans = [("Drying", yellow, "#2E7D6B"), ("Maillard", crack - yellow, "#C58A2E"),
-             ("Development", total - crack, "#C2521F")]
+    shares = phase_shares(total, yellow, crack)
+    spans = [("Drying", yellow, shares.get("drying"), "#2E7D6B"),
+             ("Maillard", crack - yellow, shares.get("maillard"), "#C58A2E"),
+             ("Development", total - crack, shares.get("development"), "#C2521F")]
     cells = []
-    for name, minutes, colour in spans:
-        share = minutes / total * 100
+    for name, minutes, share, colour in spans:
+        if share is None:
+            continue
         cells.append(
             f'<div style="flex:{max(share, 6)};background:{colour};color:#fff;'
             f'padding:8px 12px;border-radius:7px">'
@@ -439,6 +442,15 @@ def phase_bar(row):
                 unsafe_allow_html=True)
 
 
+def pick(row, *names):
+    """The first of these the roast actually has a number for."""
+    for name in names:
+        value = row.get(name)
+        if value is not None and not (isinstance(value, float) and pd.isna(value)):
+            return value
+    return None
+
+
 def readout(row):
     """The numbers RoasTime puts beside the graph, in the same order."""
     def clock(minutes):
@@ -448,8 +460,12 @@ def readout(row):
         return f"{int(minutes)}:{int(round((minutes % 1) * 60)):02d}"
 
     crack, total = row.get("firstCrackTime"), row.get("totalRoastMinutes")
-    development = (total - crack) if pd.notna(crack) and pd.notna(total) else float("nan")
-    share = (development / total * 100) if pd.notna(development) and total else float("nan")
+    development = row.get("developmentTime")
+    if development is None or pd.isna(development):
+        development = (total - crack) if pd.notna(crack) and pd.notna(total) else float("nan")
+    # The same share the pattern checks and the coaching rules judge, so what is
+    # shown here and what the app says about it can never be different numbers.
+    share = phase_shares(total, row.get("yellowPointTime"), crack).get("development", float("nan"))
     rise = row.get("tempRiseAfterFirstCrack")
     green, roasted = row.get("greenWeight"), row.get("weightRoasted")
     loss = row.get("weightLossPercent")
@@ -472,10 +488,13 @@ def readout(row):
             ("Charge", number(row.get("drumChargeTemperature"), " °C", 0)),
             ("Turning point", f'{clock(row.get("turningPointTime"))} · '
                               f'{number(row.get("ibtsTurningPointTemp"), " °C", 1)}'),
+            # RoasTime's own field when it is there, the temperature read off the
+            # curve at that point when it is not — never a blank for a roast that
+            # plainly reached yellowing.
             ("Yellowing", f'{clock(row.get("yellowPointTime"))} · '
-                          f'{number(row.get("drumTemperatureYellowingStart"), " °C", 1)}'),
+                          f'{number(pick(row, "drumTemperatureYellowingStart", "yellowPointTemp"), " °C", 1)}'),
             ("First crack", f'{clock(crack)} · '
-                            f'{number(row.get("drumTemperatureFirstCrackStart"), " °C", 1)}'),
+                            f'{number(pick(row, "drumTemperatureFirstCrackStart", "firstCrackTemp"), " °C", 1)}'),
             ("Development", f'{clock(development)} · {number(share, "%")}'
                             + (f' · +{float(rise):.1f} °C' if pd.notna(rise) else "")),
             ("Total time", clock(total)),
@@ -546,8 +565,11 @@ def roast_detail(row, frame):
         facts = st.columns(4)
         facts[0].metric("Total", number(row.get("totalRoastMinutes"), " min"))
         facts[1].metric("First crack", number(row.get("firstCrackTime"), " min"))
-        development = row.get("totalRoastMinutes", float("nan")) - row.get("firstCrackTime", float("nan"))
-        facts[2].metric("Development", number(development, " min"))
+        shares = phase_shares(row.get("totalRoastMinutes"), row.get("yellowPointTime"),
+                              row.get("firstCrackTime"))
+        facts[2].metric("Development", number(row.get("developmentTime"), " min"),
+                        help=(f"{shares['development']:.1f}% of the roast"
+                              if "development" in shares else None))
         facts[3].metric("Drop", number(row.get("drumDropTemperature"), " °C", 0))
 
         more = st.columns(4)
@@ -567,7 +589,15 @@ def roast_detail(row, frame):
 
         st.markdown("#### About this roast")
         with st.form(f"notes_{row['uid']}"):
-            coffee = st.text_input("Coffee", value=text_of(row.get("coffee")))
+            bean_linked = text_of(row.get("bean_name"))
+            coffee = st.text_input(
+                "Coffee", value=text_of(row.get("coffee")),
+                help=("RoasTime links this roast to the bean "
+                      f"“{bean_linked}”, which is what it is compared against. "
+                      "Change the name here and every roast of that bean follows."
+                      if bean_linked else
+                      "No bean file matched this roast, so this name is what it is "
+                      "grouped and compared by."))
             columns = st.columns(2)
             origin = columns[0].text_input("Origin", value=text_of(row.get("origin")))
             process = columns[1].text_input("Process", value=text_of(row.get("process")))
@@ -631,12 +661,24 @@ def page_coffees():
 
     brand_header("How each coffee is going")
 
+    # Grouped by the bean RoasTime links to each roast, so two roasts of one
+    # coffee stay together whatever their roast titles say. Where no bean file
+    # matched, what you typed is used, and a name read off the title last.
+    if "coffee_source" in frame:
+        from_bean = int((frame["coffee_source"] == "bean file").sum())
+        if from_bean < len(frame):
+            st.caption(f"{from_bean} of {len(frame)} roasts are grouped by their RoasTime bean; "
+                       "the rest by what you typed, or by their roast name. The **Data** page "
+                       "shows which, and why.")
+
     grouped = frame.groupby("coffee")
     summary = pd.DataFrame({
         "roasts": grouped.size(),
         "last roasted": grouped["roasted_at"].max().dt.strftime("%Y-%m-%d"),
         "avg first crack": grouped["firstCrackTime"].mean().round(1),
-        "avg development": (grouped["totalRoastMinutes"].mean() - grouped["firstCrackTime"].mean()).round(1),
+        # The mean of each roast's development, not the difference of two means:
+        # a roast missing either number would otherwise skew both halves apart.
+        "avg development": grouped["developmentTime"].mean().round(1),
         "avg drop °C": grouped["drumDropTemperature"].mean().round(0),
         "best rating": grouped["rating"].max(),
     }).sort_values("last roasted", ascending=False)
@@ -949,6 +991,34 @@ def page_data():
         st.caption("Also stored from RoasTime: " +
                    ", ".join(f"{count} {kind}(s)" for kind, count in held.items()) +
                    " — these fill in origin, process, recipe and machine on each roast.")
+
+    # Roasts are compared bean against bean, so it matters that the bean files
+    # are actually there and actually match. Say so plainly rather than letting a
+    # roast quietly fall back to a name read off its title.
+    if not frame.empty:
+        st.markdown("### Which bean each roast is grouped under")
+        link = library.link_report(frame.to_dict("records"))
+        missing = sum(link["missing"].values())
+        counted = st.columns(3)
+        counted[0].metric("Matched a bean file", link["matched"])
+        counted[1].metric("Bean file not here", missing)
+        counted[2].metric("No bean recorded", link["no_id"])
+
+        if link["matched"] == link["roasts"]:
+            st.caption("Every roast is grouped under the bean RoasTime says was in the drum.")
+        else:
+            st.caption(
+                "Roasts without a matching bean fall back to what you typed, and then to a "
+                "name read out of the roast title — which is why two roasts of one coffee can "
+                "end up apart.")
+        if missing:
+            worst = sorted(link["missing"].items(), key=lambda pair: -pair[1])[:5]
+            st.warning(
+                f"{missing} roast(s) point at a bean whose file has not arrived: "
+                + ", ".join(f"`{ref}` ({count})" for ref, count in worst)
+                + ". Sync the `beans` folder — `mac/sync_to_database.py` sends it with the "
+                  "roasts, or drop the whole RoasTime folder onto the box above.",
+                icon=":material/link_off:")
 
     with st.expander("Manage stored roasts"):
         st.caption("Removing roasts here does not touch RoasTime — the app only ever reads "

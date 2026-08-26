@@ -21,13 +21,15 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import learning, store
+from . import learning, metrics as metric_rules, store
 
 # What a roast is being steered toward. These are starting points, not laws --
 # every one of them can be overridden per coffee once a reference roast exists.
+# The two phase bands are the same objects the pattern checks use, so a flag and
+# a piece of advice cannot disagree about where the line is.
 TARGETS = {
-    "development_percent": (18.0, 25.0),
-    "drying_percent": (28.0, 40.0),
+    "development_percent": metric_rules.DEVELOPMENT_BAND,
+    "drying_percent": metric_rules.DRYING_BAND,
     "turning_point_minutes": (0.8, 1.8),
     "total_minutes": (8.0, 14.0),
     "ror_at_first_crack": (3.0, 12.0),
@@ -46,21 +48,30 @@ def _value(row, name, default=np.nan):
     return value if np.isfinite(value) else np.nan
 
 
+def _shown(value, decimals: int = metric_rules.SHOWN_DECIMALS):
+    """A measure at the precision the roaster sees it.
+
+    Bands are judged on this rather than on the raw number, so a roast printed as
+    24.6% development is never told it ran past 25%.
+    """
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return round(value, decimals) if np.isfinite(value) else np.nan
+
+
 def _phase_percentages(row) -> dict:
-    """Drying / Maillard / development as shares of the roast, from charge."""
-    total = _value(row, "totalRoastMinutes")
-    yellow = _value(row, "yellowPointTime")
-    crack = _value(row, "firstCrackTime")
-    if not np.isfinite(total) or total <= 0:
-        return {}
-    result = {}
-    if np.isfinite(yellow):
-        result["drying"] = yellow / total * 100
-    if np.isfinite(yellow) and np.isfinite(crack):
-        result["maillard"] = (crack - yellow) / total * 100
-    if np.isfinite(crack):
-        result["development"] = (total - crack) / total * 100
-    return result
+    """Drying / Maillard / development as shares of the roast, from charge.
+
+    One definition, in :mod:`roastcoach.metrics`, shared with the pattern checks
+    and with what the roast readout shows. Rounded to the decimal the roaster is
+    shown, so a card never argues with the number printed above it.
+    """
+    shares = metric_rules.phase_shares(_value(row, "totalRoastMinutes"),
+                                       _value(row, "yellowPointTime"),
+                                       _value(row, "firstCrackTime"))
+    return {name: round(value, metric_rules.SHOWN_DECIMALS) for name, value in shares.items()}
 
 
 def metric_value(row, metric: str):
@@ -123,7 +134,7 @@ def rule_development(row, context, path=None):
     if development < low:
         rule_id = "development_short"
         headline = "Development is short"
-        finding = (f"First crack to drop is {development:.0f}% of the roast "
+        finding = (f"First crack to drop is {development:.1f}% of the roast "
                    f"({total - crack:.1f} of {total:.1f} min). Below {low:.0f}% the cup "
                    "tends to read sharp and underdeveloped.")
         action = (f"Carry this roast {wanted_minutes:+.1f} min further before dropping — "
@@ -132,7 +143,7 @@ def rule_development(row, context, path=None):
     else:
         rule_id = "development_long"
         headline = "Development is running long"
-        finding = (f"First crack to drop is {development:.0f}% of the roast "
+        finding = (f"First crack to drop is {development:.1f}% of the roast "
                    f"({total - crack:.1f} of {total:.1f} min). Past {high:.0f}% the "
                    "origin character starts to flatten out.")
         action = (f"Drop {abs(wanted_minutes):.1f} min earlier — about "
@@ -253,7 +264,7 @@ def rule_drying(row, context, path=None):
     return {
         "rule_id": "drying_fast" if fast else "drying_slow",
         "headline": "Drying went through too quickly" if fast else "Drying is dragging",
-        "finding": (f"Yellowing at {yellow:.1f} min is {drying:.0f}% of a {total:.1f} min roast. "
+        "finding": (f"Yellowing at {yellow:.1f} min is {drying:.1f}% of a {total:.1f} min roast. "
                     + ("Rushing the free moisture out tends to leave grassy, underbaked notes."
                        if fast else
                        "A long drying phase flattens acidity and dulls the cup.")),
@@ -272,7 +283,7 @@ def rule_drying(row, context, path=None):
 
 
 def rule_turning_point(row, context, path=None):
-    turning = _value(row, "turningPointTime")
+    turning = _shown(_value(row, "turningPointTime"))
     if not np.isfinite(turning):
         return None
     low, high = context["targets"]["turning_point_minutes"]
@@ -364,7 +375,7 @@ def rule_drift(row, context, path=None):
 
 
 def rule_weight_loss(row, context, path=None):
-    loss = _value(row, "weightLossPercent")
+    loss = _shown(_value(row, "weightLossPercent"))
     if not np.isfinite(loss):
         return None
     low, high = context["targets"]["weight_loss_percent"]
@@ -376,7 +387,7 @@ def rule_weight_loss(row, context, path=None):
         "rule_id": "weight_loss_high" if heavy else "weight_loss_low",
         "headline": "Weight loss is high" if heavy else "Weight loss is low",
         "finding": (f"This roast lost {loss:.1f}% of its weight"
-                    + (f", with {development:.0f}% of the roast after first crack"
+                    + (f", with {development:.1f}% of the roast after first crack"
                        if development else "")
                     + (". That is dark territory for a filter roast." if heavy
                        else ". The beans may not be fully developed inside.")),
