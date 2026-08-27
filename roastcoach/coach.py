@@ -41,8 +41,9 @@ TARGETS = {
 TOLERANCE = 0.35  # a prediction counts as met within this share of the intended move
 
 # What this file can do — see the note in store.py. 2 reads the phase bands from
-# metrics.py and judges them at the precision shown.
-VERSION = 2
+# metrics.py and judges them at the precision shown; 3 compares against the
+# bean's own baseline where it exists and says which comparison it used.
+VERSION = 3
 
 
 def _value(row, name, default=np.nan):
@@ -141,9 +142,22 @@ def rule_development(row, context, path=None):
     development = phases.get("development")
     if development is None or not np.isfinite(development):
         return None
-    low, high = context["targets"]["development_percent"]
-    if low <= development <= high:
-        return None
+
+    # Against this bean's own history where there is one; against the configured
+    # band otherwise. Which of the two was used is said out loud, because they
+    # deserve different amounts of trust.
+    baseline = (context.get("baseline") or {}).get("development_ratio")
+    if baseline is not None and np.isfinite(_value({"b": baseline}, "b")):
+        baseline = _shown(baseline)
+        if abs(development - baseline) < 2.5:
+            return None
+        low = high = baseline
+        basis = f"your own {int(context['baseline']['roasts'])} roasts of this coffee"
+    else:
+        low, high = context["targets"]["development_percent"]
+        basis = f"this app's configured band of {low:.0f}–{high:.0f}%"
+        if low <= development <= high:
+            return None
 
     total = _value(row, "totalRoastMinutes")
     crack = _value(row, "firstCrackTime")
@@ -154,8 +168,9 @@ def rule_development(row, context, path=None):
         rule_id = "development_short"
         headline = "Development is short"
         finding = (f"First crack to drop is {development:.1f}% of the roast "
-                   f"({total - crack:.1f} of {total:.1f} min). Below {low:.0f}% the cup "
-                   "tends to read sharp and underdeveloped.")
+                   f"({total - crack:.1f} of {total:.1f} min), against {basis}. "
+                   "Short development is associated with sharp, cereal-like cups — "
+                   "association, not diagnosis: cup it before believing it.")
         action = (f"Carry this roast {wanted_minutes:+.1f} min further before dropping — "
                   f"about {(total + wanted_minutes):.1f} min total. Take the heat down a "
                   "step at first crack so the extra time is gentle rather than hot.")
@@ -163,15 +178,17 @@ def rule_development(row, context, path=None):
         rule_id = "development_long"
         headline = "Development is running long"
         finding = (f"First crack to drop is {development:.1f}% of the roast "
-                   f"({total - crack:.1f} of {total:.1f} min). Past {high:.0f}% the "
-                   "origin character starts to flatten out.")
+                   f"({total - crack:.1f} of {total:.1f} min), against {basis}. "
+                   "Long development is associated with flatter, more muted cups — "
+                   "association, not diagnosis: cup it before believing it.")
         action = (f"Drop {abs(wanted_minutes):.1f} min earlier — about "
                   f"{(total + wanted_minutes):.1f} min total. If first crack keeps arriving "
                   "late, the fix belongs earlier in the roast rather than at the drop.")
 
     return {
         "rule_id": rule_id, "headline": headline, "finding": finding, "action": action,
-        "reason": "Development share sets how far the roast travels after first crack.",
+        "reason": ("Development share sets how far the roast travels after first crack. "
+                   f"Compared against {basis}."),
         "target_metric": "development_percent",
         "current_value": development, "predicted_value": float(target),
         "direction": "up" if development < low else "down",
@@ -193,10 +210,15 @@ def rule_crash(row, context, path=None):
     return {
         "rule_id": "ror_crash",
         "headline": "Rate of rise crashed after first crack",
-        "finding": ("Rate of rise fell away once first crack started"
-                    + (f", reaching {current:.1f} °C/min at the crack itself" if np.isfinite(current) else "")
-                    + ". A crash there is the roast running out of momentum, and it usually "
-                      "shows up as a hollow, papery cup."),
+        "finding": (
+            (f"Rate of rise fell {_value(row, 'crashPercent'):.0f}% from its settled "
+             f"pre-crack level"
+             if np.isfinite(_value(row, "crashPercent")) else
+             "Rate of rise fell away once first crack started")
+            + (f", to {_value(row, 'crashTroughROR'):.1f} °C/min"
+               if np.isfinite(_value(row, "crashTroughROR")) else "")
+            + ". Practitioners associate a pronounced crash there with hollow or baked "
+              "character; the curve cannot establish that on its own."),
         "action": (f"The cure is earlier, not at the crack. Add heat through the Maillard "
                    f"phase — {_step_text(abs(steps) or 1, 'power')} from the "
                    f"{power:.1f} average you used — and then reduce it *before* first crack "
@@ -447,8 +469,14 @@ def build_context(roasts: pd.DataFrame, row, path: str | None = None) -> dict:
         if not pool.empty:
             reference = pool.sort_values("rating" if not rated.empty else "roasted_at").iloc[-1]
 
+    # What this bean usually does on this machine. Where it exists, it beats every
+    # universal target the app carries — and the rules say which they used.
+    from . import diagnostics
+
+    baseline = diagnostics.baseline_for(roasts, coffee, exclude=row.get("uid"))
+
     return {"targets": TARGETS, "reference": reference, "coffee": coffee,
-            "history": same, "path": path}
+            "history": same, "baseline": baseline, "path": path}
 
 
 def review(roasts: pd.DataFrame, roast_id: str, path: str | None = None) -> list[dict]:

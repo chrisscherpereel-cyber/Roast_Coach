@@ -12,10 +12,10 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-from roastcoach import auth, charts, coach, db, demo_data, learning, library, store
+from roastcoach import (auth, charts, coach, db, demo_data, diagnostics, evidence,
+                        learning, library, store)
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach import metrics as metric_rules
-from roastcoach.metrics import FLAG_EXPLANATIONS, FLAG_LABELS
 from roastcoach.naming import label_for
 
 ASSETS = Path(__file__).parent / "assets"
@@ -42,10 +42,12 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 3),
+NEEDS = (("roastcoach/store.py", store, 4),
          ("roastcoach/library.py", library, 2),
-         ("roastcoach/metrics.py", metric_rules, 2),
-         ("roastcoach/coach.py", coach, 2))
+         ("roastcoach/metrics.py", metric_rules, 3),
+         ("roastcoach/coach.py", coach, 3),
+         ("roastcoach/diagnostics.py", diagnostics, 1),
+         ("roastcoach/evidence.py", evidence, 1))
 
 STALE = [name for name, module, wanted in NEEDS
          if getattr(module, "VERSION", 0) < wanted]
@@ -442,7 +444,10 @@ def page_roasts():
                                      min_value=dates.min().date(), max_value=dates.max().date())
     else:
         span = None
-    only_flagged = filters[2].checkbox("Only roasts with something flagged")
+    only_flagged = filters[2].checkbox(
+        "Only roasts with something flagged",
+        help="Flagged means a measured condition crossed one of this app's thresholds — "
+             "not that anything is wrong with the coffee.")
 
     view = frame.copy()
     if picked:
@@ -518,6 +523,76 @@ def pick(row, *names):
         if value is not None and not (isinstance(value, float) and pd.isna(value)):
             return value
     return None
+
+
+GRADE_COLOUR = {"A": "#2E7D6B", "B": "#C58A2E", "C": "#7A6A5F", "D": "#8C5AA8"}
+
+
+def findings_panel(row, frame):
+    """Every finding, in three levels, with the cupping loop attached.
+
+    Observation is what was measured. Diagnosis is the name practice gives it,
+    under a threshold this app is willing to state. Cup risk is a hypothesis, and
+    is the only thing anyone can settle — which is why there is a button for it.
+    """
+    baseline = optional(diagnostics, "baseline_for", frame, row.get("coffee"),
+                        exclude=row.get("uid"))
+    found = optional(diagnostics, "assess", row, baseline, default=[]) or []
+
+    if baseline:
+        st.caption(f"Compared against {baseline['from']} of **{baseline['coffee']}** — "
+                   f"{baseline['roasts']} roasts of this bean. A matched baseline beats any "
+                   "universal target, so where one exists it is what the app uses.")
+    else:
+        st.caption("No baseline for this bean yet: three roasts of it and comparisons switch "
+                   "from this app's configured bands to your own record.")
+
+    if not found:
+        st.success("Nothing measured outside the ordinary, and nothing recorded by eye.",
+                   icon=":material/check:")
+        return
+
+    verdicts = optional(store, "sensory_for", row["uid"], default={}) or {}
+
+    for item in found:
+        grade = item.get("grade", "C")
+        with st.container(border=True):
+            head = st.columns([6, 2])
+            head[0].markdown(f"**{item['name']}**")
+            head[1].markdown(
+                f"<div style='text-align:right'><span style='background:{GRADE_COLOUR.get(grade)};"
+                f"color:#fff;border-radius:5px;padding:1px 7px;font-size:.72rem'>"
+                f"{grade} · {item['certainty']}</span></div>", unsafe_allow_html=True)
+
+            st.markdown(f"<div style='font-variant-numeric:tabular-nums'>{item['observation']}"
+                        "</div>", unsafe_allow_html=True)
+            if item.get("diagnosis"):
+                st.markdown(f"<div style='opacity:.72;margin-top:6px'>{item['diagnosis']}</div>",
+                            unsafe_allow_html=True)
+
+            if item.get("risk"):
+                st.markdown(
+                    f"<div style='margin-top:8px;padding:8px 10px;border-left:3px solid "
+                    f"{GRADE_COLOUR['D']};opacity:.85'><b>Possible cup effect</b> — needs "
+                    f"cupping: {item['risk']}</div>", unsafe_allow_html=True)
+
+                recorded = verdicts.get(item["id"], {})
+                said = recorded.get("verdict")
+                if said:
+                    st.caption(f"At the table: **{said}**"
+                               + (f" — {recorded.get('note')}" if recorded.get("note") else ""))
+                buttons = st.columns(3)
+                for column, verdict, label in zip(buttons, store.VERDICTS,
+                                                  ("Tasted it — confirmed",
+                                                   "Cupped, not present", "Unsure")):
+                    if column.button(label, key=f"cup_{row['uid']}_{item['id']}_{verdict}",
+                                     use_container_width=True):
+                        store.save_sensory(row["uid"], item["id"], verdict)
+                        refresh()
+                        st.rerun()
+
+            if item.get("source"):
+                st.caption(f"Source: {item['source']}")
 
 
 def readout(row):
@@ -647,10 +722,8 @@ def roast_detail(row, frame):
         more[2].metric("Peak RoR", number(row.get("peakROR"), " °C/min"))
         more[3].metric("Weight loss", number(row.get("weightLossPercent"), " %"))
 
-        flags = [f for f in FLAG_LABELS if bool(row.get(f))]
-        if flags:
-            for flag in flags:
-                st.warning(f"**{FLAG_LABELS[flag]}** — {FLAG_EXPLANATIONS[flag]}", icon="⚠️")
+        st.markdown("#### What this roast did")
+        findings_panel(row, frame)
 
     with right:
         with st.expander("Every number RoasTime records", expanded=True):
@@ -688,12 +761,37 @@ def roast_detail(row, frame):
                                             step=0.25, min_value=0.0, max_value=100.0)
             notes = st.text_area("Tasting notes and what you changed",
                                  value=text_of(row.get("notes")), height=110)
+
+            st.markdown("**What the curve cannot see**")
+            st.caption("Measured roast colour carries more sensory weight than drop "
+                       "temperature does. Quakers are a green-coffee defect, recorded here "
+                       "so they are never blamed on the profile.")
+            columns = st.columns(2)
+            colour_whole = columns[0].number_input(
+                "Roast colour — whole bean", value=float(row.get("colour_whole") or 0),
+                step=1.0, help="Agtron, ColorTrack or whatever scale your meter uses.")
+            colour_ground = columns[1].number_input(
+                "Roast colour — ground", value=float(row.get("colour_ground") or 0), step=1.0)
+            columns = st.columns(2)
+            colour_sd = columns[0].number_input(
+                "Batch colour spread", value=float(row.get("colour_sd") or 0), step=0.1,
+                help="Standard deviation across individual beans, if you measure it.")
+            quakers = columns[1].number_input(
+                "Quakers picked out", value=float(row.get("quaker_count") or 0), step=1.0)
+            defects = st.text_input(
+                "Seen on the beans", value=text_of(row.get("visual_defects")),
+                placeholder="scorching · tipping · facing · charring · mottling",
+                help="Type what you saw. Scorching, tipping, facing and charring are "
+                     "recognised and explained back with their likely mechanism.")
             if st.form_submit_button("Save", type="primary"):
                 store.save_notes(row["uid"], {
                     "coffee": coffee.strip(), "origin": origin.strip(), "process": process.strip(),
                     "variety": variety.strip(), "farm": farm.strip(),
                     "green_weight": green or None, "roast_level": level or None,
-                    "rating": rating or None, "cupping_score": score or None, "notes": notes})
+                    "rating": rating or None, "cupping_score": score or None, "notes": notes,
+                    "colour_whole": colour_whole or None, "colour_ground": colour_ground or None,
+                    "colour_sd": colour_sd or None, "quaker_count": quakers or None,
+                    "visual_defects": defects.strip()})
                 refresh()
                 st.toast("Saved.")
                 st.rerun()
@@ -1145,6 +1243,91 @@ def page_data():
                 st.rerun()
 
 
+def page_method():
+    brand_header("What the app is willing to say, and how sure it is")
+
+    st.markdown(
+        "Roasting software has a habit of reading a curve and announcing a taste. This one "
+        "does not. Every finding is built in three levels, and each claims less than the "
+        "one before it."
+    )
+
+    levels = st.columns(3)
+    levels[0].info("**Observation**  \nWhat was measured. *Rate of rise fell from 10.2 to "
+                   "5.6 °C/min between 8:16 and 8:49.* Reproducible, no opinion in it.",
+                   icon=":material/straighten:")
+    levels[1].warning("**Diagnosis**  \nThe name roasting practice gives that shape, under "
+                      "a stated threshold. *Pronounced first-crack crash.*",
+                      icon=":material/label:")
+    levels[2].error("**Possible cup effect**  \nA hypothesis. *Associated with muted or "
+                    "baked character.* Only cupping settles it — so the app asks you.",
+                    icon=":material/local_cafe:")
+
+    st.markdown("### How much each claim is worth")
+    grades = getattr(evidence, "GRADES", {})
+    st.dataframe(pd.DataFrame([
+        {"Grade": key, "Means": entry["name"], "Said as": entry["wording"],
+         "In practice": entry["meaning"]}
+        for key, entry in grades.items()], columns=["Grade", "Means", "Said as", "In practice"]),
+        width="stretch", hide_index=True)
+
+    st.markdown("### Every threshold, and what it is")
+    st.caption("These are application settings, not published boundaries. They live at the "
+               "top of `roastcoach/metrics.py`, in one place, so they can be argued with.")
+    st.dataframe(pd.DataFrame([
+        {"Setting": "Crash bands",
+         "Value": "<15% minimal · 15–30% mild · 30–45% moderate · >45% pronounced",
+         "Why it is this way": "A crash is measured as a percentage fall from the roast's "
+                               "own settled pre-crack rate, never a fixed °C/min: that "
+                               "number depends on probe placement, sampling rate, smoothing "
+                               "and batch size, so it does not travel between machines."},
+        {"Setting": "Crash raised at",
+         "Value": f"{metric_rules.CRASH_FLAG_FROM:.0f}% fall",
+         "Why it is this way": "Some decline after first crack is ordinary. This is where "
+                               "the app starts calling it a crash."},
+        {"Setting": "Flick",
+         "Value": f"sustained rise ≥ {metric_rules.FLICK_POSSIBLE_SECONDS:.0f}s "
+                  f"(< {metric_rules.FLICK_TRANSIENT_SECONDS:.0f}s is noise)",
+         "Why it is this way": "A reversal has to last longer than the probe's own wobble "
+                               "before it is worth a name."},
+        {"Setting": "Stall",
+         "Value": f"±{metric_rules.STALL_DEAD_BAND:.1f} °C/min for "
+                  f"{metric_rules.STALL_SECONDS:.0f}s",
+         "Why it is this way": "The dead band is for probe noise. Otherwise this is the most "
+                               "objective condition here — the roast stopped climbing."},
+        {"Setting": "Phase bands",
+         "Value": f"development {metric_rules.DEVELOPMENT_BAND[0]:.0f}–"
+                  f"{metric_rules.DEVELOPMENT_BAND[1]:.0f}% · drying "
+                  f"{metric_rules.DRYING_BAND[0]:.0f}–{metric_rules.DRYING_BAND[1]:.0f}%",
+         "Why it is this way": "Used only until you have three roasts of a bean. After that "
+                               "the comparison is against your own record, which is a much "
+                               "stronger statement than any universal figure. Excellent "
+                               "roasts are made outside these bands."},
+    ]), width="stretch", hide_index=True)
+
+    st.markdown("### Where the confidence comes from")
+    sources = getattr(evidence, "SOURCES", [])
+    st.dataframe(pd.DataFrame([
+        {"Source": item["cite"], "Kind": item["kind"], "What it supports": item["what"]}
+        for item in sources]), width="stretch", hide_index=True)
+    st.caption("Practitioner and educational sources are listed as such. They are the origin "
+               "of most modern rate-of-rise vocabulary — crash, flick, declining rate of "
+               "rise, development ratio — and that is a different thing from experimental "
+               "validation.")
+
+    st.markdown("### Which warnings have actually landed")
+    board = optional(store, "sensory_scoreboard", default=pd.DataFrame())
+    if board is None or board.empty:
+        st.caption("Nothing cupped against a warning yet. Each roast's findings carry "
+                   "**Tasted it — confirmed** / **Cupped, not present** buttons; once a few "
+                   "are recorded, this becomes the honest measure of whether a heuristic "
+                   "earns its place — not how often it fires, but how often somebody tasted "
+                   "what it warned about.")
+    else:
+        st.dataframe(board.rename(columns={"condition_id": "condition"}),
+                     width="stretch", hide_index=True)
+
+
 # ---------------------------------------------------------------------------
 
 st.logo(str(ASSETS / "logo-full.svg"), icon_image=str(ASSETS / "icon-64.png"))
@@ -1159,6 +1342,7 @@ pages = [
     st.Page(page_coffees, title="Coffees", icon=":material/coffee:"),
     st.Page(page_learning, title="Learning", icon=":material/school:"),
     st.Page(page_data, title="Data", icon=":material/folder:"),
+    st.Page(page_method, title="Method", icon=":material/balance:"),
 ]
 
 # The test suite opens one page at a time; the browser always gets all five.

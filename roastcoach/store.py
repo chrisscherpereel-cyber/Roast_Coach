@@ -48,10 +48,14 @@ CURVE_COLUMNS = ["roast_id", "seconds", "ibts_temp", "bean_temp",
 SERIES_COLUMNS = [column for column in CURVE_COLUMNS if column != "roast_id"]
 
 NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
-               "roast_level", "notes", "rating", "cupping_score", "is_reference"]
+               "roast_level", "notes", "rating", "cupping_score", "is_reference",
+               # What no probe can see: measured colour, how evenly the batch
+               # roasted, quakers picked out, and what the beans looked like.
+               "colour_whole", "colour_ground", "colour_sd", "quaker_count",
+               "visual_defects"]
 
 TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
-          "effects", "rule_stats", "sources", "reference")
+          "effects", "rule_stats", "sources", "reference", "sensory")
 
 # What this file can do, for a deploy that updated some files and not others.
 # app.py says which version it needs and names anything older on screen instead
@@ -59,7 +63,8 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 # new here.
 #   1  the original      2  fingerprint(), summary(frame=)
 #   3  outdated() / remeasure(), the bean as the coffee's identity
-VERSION = 3
+#   4  colour and defect fields, and the cupping verdicts in `sensory`
+VERSION = 4
 
 
 def _now() -> str:
@@ -614,6 +619,51 @@ def save_notes(roast_id: str, values: dict, path: str | None = None) -> None:
     db.upsert("roast_notes", "roast_id", fields, override=path)
 
 
+# ---------------------------------------------------------------------------
+# Cupping: where a risk stops being a hypothesis
+# ---------------------------------------------------------------------------
+
+VERDICTS = ("confirmed", "not present", "unsure")
+
+
+def save_sensory(roast_id: str, condition_id: str, verdict: str, note: str = "",
+                 path: str | None = None) -> None:
+    """What the cupping table said about one risk the app raised.
+
+    The app is allowed to say a pattern is *associated* with baked character. Only
+    this table is allowed to say the coffee tasted baked.
+    """
+    db.upsert("sensory", "key", {
+        "key": f"{roast_id}/{condition_id}",
+        "roast_id": roast_id, "condition_id": condition_id,
+        "verdict": verdict, "note": note or "",
+        "recorded_at": _now(), "recorded_by": _who(),
+    }, override=path)
+
+
+def sensory_for(roast_id: str, path: str | None = None) -> dict:
+    """``{condition_id: {verdict, note, …}}`` for one roast."""
+    frame = db.frame("SELECT * FROM sensory WHERE roast_id = :id", {"id": roast_id},
+                     override=path)
+    if frame.empty:
+        return {}
+    return {row["condition_id"]: dict(row) for _, row in frame.iterrows()}
+
+
+def sensory_scoreboard(path: str | None = None):
+    """How often each risk the app raised was confirmed at the table.
+
+    This is the honest measure of whether a heuristic earns its place: not how
+    often it fires, but how often somebody tasted what it warned about.
+    """
+    return db.frame(
+        "SELECT condition_id, "
+        "       COUNT(*) AS cupped, "
+        "       SUM(CASE WHEN verdict = 'confirmed' THEN 1 ELSE 0 END) AS confirmed, "
+        "       SUM(CASE WHEN verdict = 'not present' THEN 1 ELSE 0 END) AS absent "
+        "FROM sensory GROUP BY condition_id ORDER BY condition_id", override=path)
+
+
 def set_reference(roast_id: str, coffee: str, path: str | None = None) -> None:
     """Mark one roast as the benchmark for its coffee; clear any previous one."""
     roasts = load_roasts(path)
@@ -636,7 +686,7 @@ def forget(roast_ids, path: str | None = None) -> int:
     params = {f"id{position}": value for position, value in enumerate(ids)}
     for table, column in (("roasts", "uid"), ("roast_curve", "roast_id"),
                           ("roast_notes", "roast_id"), ("sources", "roast_id"),
-                          ("recommendations", "roast_id")):
+                          ("recommendations", "roast_id"), ("sensory", "roast_id")):
         db.run(f"DELETE FROM {table} WHERE {column} IN ({marks})", params, override=path)
     return len(ids)
 

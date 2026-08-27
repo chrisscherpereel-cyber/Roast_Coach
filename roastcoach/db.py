@@ -152,13 +152,29 @@ def schema(name: str) -> list[str]:
                samples INTEGER NOT NULL,
                payload TEXT NOT NULL)""",
 
+        # What the roaster adds. The last five are the things no probe can see —
+        # measured colour, batch spread, quakers, and what the beans looked like —
+        # and they are added to existing databases by ensure_columns() below,
+        # because CREATE TABLE IF NOT EXISTS will not alter a table that is there.
         """CREATE TABLE IF NOT EXISTS roast_notes (
                roast_id TEXT PRIMARY KEY,
                coffee TEXT, origin TEXT, process TEXT, variety TEXT, farm TEXT,
                green_weight DOUBLE PRECISION, roast_level TEXT, notes TEXT,
                rating DOUBLE PRECISION, cupping_score DOUBLE PRECISION,
                is_reference INTEGER DEFAULT 0,
+               colour_whole DOUBLE PRECISION, colour_ground DOUBLE PRECISION,
+               colour_sd DOUBLE PRECISION, quaker_count DOUBLE PRECISION,
+               visual_defects TEXT,
                updated_at TEXT, updated_by TEXT)""",
+
+        # A cup risk the app raised, and what the cupping table said about it.
+        # This is where a hypothesis becomes an observation, or stops being one.
+        """CREATE TABLE IF NOT EXISTS sensory (
+               key TEXT PRIMARY KEY,
+               roast_id TEXT NOT NULL, condition_id TEXT NOT NULL,
+               verdict TEXT, note TEXT,
+               recorded_at TEXT, recorded_by TEXT)""",
+        "CREATE INDEX IF NOT EXISTS sensory_roast ON sensory (roast_id)",
 
         f"""CREATE TABLE IF NOT EXISTS recommendations (
                id {serial},
@@ -207,6 +223,55 @@ def schema(name: str) -> list[str]:
     ]
 
 
+# Columns added to tables that already exist in databases created by an earlier
+# version. CREATE TABLE IF NOT EXISTS does nothing to a table that is there, so
+# without this a roaster who has been using the app since last week would find
+# the new fields missing and every write failing.
+ADDED_COLUMNS = {
+    "roast_notes": {
+        "colour_whole": "DOUBLE PRECISION",
+        "colour_ground": "DOUBLE PRECISION",
+        "colour_sd": "DOUBLE PRECISION",
+        "quaker_count": "DOUBLE PRECISION",
+        "visual_defects": "TEXT",
+    },
+}
+
+
+def columns(table: str, override: str | None = None) -> set[str]:
+    """The columns a table actually has, asked in each dialect's own way."""
+    made = engine(override)
+    with made.connect() as connection:
+        if made.dialect.name == "sqlite":
+            rows = connection.execute(text(f"PRAGMA table_info({table})")).fetchall()
+            return {row[1] for row in rows}
+        rows = connection.execute(
+            text("SELECT column_name FROM information_schema.columns "
+                 "WHERE table_name = :table"), {"table": table}).fetchall()
+        return {row[0] for row in rows}
+
+
+def ensure_columns(override: str | None = None) -> list[str]:
+    """Add anything ADDED_COLUMNS lists that this database has not got yet."""
+    added = []
+    for table, wanted in ADDED_COLUMNS.items():
+        try:
+            present = columns(table, override)
+        except Exception:
+            continue
+        missing = {name: kind for name, kind in wanted.items() if name not in present}
+        if not missing:
+            continue
+        with engine(override).begin() as connection:
+            for name, kind in missing.items():
+                try:
+                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {kind}"))
+                    added.append(f"{table}.{name}")
+                except Exception:          # a parallel process got there first
+                    continue
+    return added
+
+
 def prepare(override: str | None = None) -> Engine:
     """Create the tables once per process, then get out of the way."""
     made = engine(override)
@@ -219,6 +284,12 @@ def prepare(override: str | None = None) -> Engine:
         with made.begin() as connection:
             for statement in schema(made.dialect.name):
                 connection.execute(text(statement))
+
+    # Outside the lock on purpose: ensure_columns() asks the engine for the
+    # tables it has, and engine() takes the same lock. Holding it here deadlocked
+    # the whole app on the first query.
+    ensure_columns(override)
+    with _lock:
         _ready.add(url)
     return made
 
