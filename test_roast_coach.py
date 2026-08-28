@@ -11,6 +11,7 @@ the roasts alone.
 import json
 import os
 import tempfile
+from pathlib import Path
 
 os.environ["ROAST_COACH_DB"] = os.path.join(tempfile.mkdtemp(), "test.db")
 os.environ["ROAST_COACH_PASSWORDS"] = "tester:roast-coach-test"
@@ -986,6 +987,50 @@ check(len(_mine) == 2 and set(_mine["bean"]) == {"Kenya Makwa AA"},
       " / ".join(sorted(set(_mine["bean"]))))
 store.forget(["mac-page-0", "mac-page-1"])
 _shutil.rmtree(_mac_root, ignore_errors=True)
+
+
+print("\nROASTS READ BY AN OLDER IMPORTER")
+# The difference that took three rounds to see: a *measurement* can be corrected
+# from the curve already stored, but a field the importer never kept is only in
+# the file. So a roast records which importer read it, and the sync notices.
+_old_root = os.path.join(tempfile.mkdtemp(), "roast-time")
+os.makedirs(os.path.join(_old_root, "roasts"))
+os.makedirs(os.path.join(_old_root, "recipes"))
+with open(os.path.join(_old_root, "recipes", "rec-late"), "w") as _out:
+    _out.write(_json.dumps({"uid": "rec-late", "guid": "device-guid",
+                            "name": "Zambia 800 Light-Medium"}))
+_late = demo_data.history(weeks=2, seed=1717)[:1]
+_late[0]["uid"] = _late[0]["guid"] = "late-roast"
+_late[0]["recipeID"] = "rec-late"          # the spelling this roaster's Bullet uses
+for _item in demo_data.as_files(_late):
+    with open(os.path.join(_old_root, "roasts", _item["name"]), "w") as _out:
+        _out.write(_item["text"])
+
+store.add_roasts(demo_data.as_files(_late))
+check(store.load_roasts().set_index("uid").loc["late-roast", "recipe_name"] == "",
+      "a roast whose recipe file has not arrived yet shows no recipe")
+
+# Pretend it was imported before this version knew to keep that field.
+_stripped = _json.loads(db.one("SELECT data FROM roasts WHERE uid = :uid",
+                               {"uid": "late-roast"})[0])
+_stripped.pop("recipeID", None)
+_stripped["import_version"] = 1
+db.run("UPDATE roasts SET data = :data WHERE uid = :uid",
+       {"data": _json.dumps(_stripped), "uid": "late-roast"})
+check(store.unread() >= 1, "the app can count roasts an older importer read",
+      str(store.unread()))
+
+import sync_to_database as _sync  # noqa: E402
+
+_before_unread = store.unread()
+_sync.sync_once(Path(_old_root) / "roasts", None)
+check(store.unread() < _before_unread,
+      "and a plain sync reads their files again by itself — no flag, no tick-box",
+      f"{_before_unread} → {store.unread()}")
+_recovered = store.load_roasts().set_index("uid").loc["late-roast"]
+check(_recovered["recipe_name"] == "Zambia 800 Light-Medium",
+      "which is what finally brings the recipe name across", str(_recovered["recipe_name"]))
+store.forget(["late-roast"])
 
 
 print("\nTHE SIDEBAR — is this current, and one button to find out")

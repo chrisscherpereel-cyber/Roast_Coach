@@ -192,6 +192,21 @@ def sync_once(folder: Path, database: str | None, again: bool = False) -> dict:
               f"current calculations…")
         store.remeasure()
 
+    # A roast read by an older importer is missing whatever that version threw
+    # away — for this roaster, the `recipeID` field, and with it every recipe name
+    # in the app. Only the file has it back, so the sync notices and reads them
+    # again by itself. Nobody should have to know to ask for that.
+    behind_import = 0
+    try:
+        behind_import = store.unread()
+    except Exception:
+        behind_import = 0
+    if behind_import and not again:
+        print(f"{time.strftime('%H:%M')}  {behind_import} roast(s) were read by an "
+              f"earlier version of the importer, which kept fewer fields — reading "
+              f"their files again so the rest arrives.")
+        again = True
+
     # `--again` reads every roast file over, rather than only what has changed.
     # Nothing you have typed is touched — a roast is matched by its own id and
     # updated in place — but fields the app did not use to keep, such as the link

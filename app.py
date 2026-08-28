@@ -44,7 +44,7 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 8),
+NEEDS = (("roastcoach/store.py", store, 9),
          ("roastcoach/library.py", library, 8),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -1536,6 +1536,28 @@ def page_data():
             "here, so they can simply be measured again.",
             "Bring them up to date", measure_again, key="remeasure",
             icon=":material/calculate:")
+
+    # Measurements can be redone from the stored curve; fields the importer never
+    # kept cannot. Those need the files, which are on the Mac, so this is the one
+    # caution whose button is a set of steps rather than an action.
+    unread = optional(store, "unread", default=0) or 0
+    if unread:
+        caution(
+            f"**{unread} roast(s) were read by an earlier version of the importer.** "
+            "It kept a fixed list of id fields, and RoasTime does not always use those "
+            "names — which is how a whole library of recipes can be here while every "
+            "**Recipe** column stays empty. The files have the rest; they need reading "
+            "again, and only the Mac that roasts can do that.",
+            "How to bring them across", key="unread", icon=":material/refresh:",
+            steps=("On the Mac that roasts, open the sync page:\n\n"
+                   "```bash\n./mac/roast-sync-app.command\n```\n\n"
+                   "and press **Sync now**. It notices these roasts by itself and reads "
+                   "their files again — nothing to tick. Each roast is matched by its "
+                   "own id and updated in place, so nothing is duplicated and nothing "
+                   "you have typed is touched.\n\n"
+                   "From a terminal instead:\n\n"
+                   "```bash\npython3 mac/sync_to_database.py\n```\n\n"
+                   "Then press **Update** in the sidebar here."))
 
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a

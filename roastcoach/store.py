@@ -81,7 +81,19 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #   7  field_report(): what RoasTime wrote, against what the app reads
 #   8  every id-shaped field on a roast is kept, so a link RoasTime spells in a
 #      way this app has never seen still arrives; add_roasts(again=True) re-reads
-VERSION = 8
+#   9  each roast records which importer read it, so a sync can tell for itself
+#      when the files need reading again — nobody has to know to ask
+VERSION = 9
+
+
+# What the importer keeps off a roast file. A roast stamped with an older number
+# was read by a version that discarded something this one keeps, and the file has
+# to be read again for it to arrive — unlike a corrected *measurement*, which can
+# be redone from the stored curve without the file.
+#   1  a fixed list of id fields: beanId, recipeId, containerId, …
+#   2  every id-shaped field, whatever RoasTime calls it — which is what finally
+#      brought `recipeID` across, and with it every recipe name in the app
+IMPORT_VERSION = 2
 
 
 def _now() -> str:
@@ -321,6 +333,7 @@ def add_roasts(files: list[dict], path: str | None = None,
         row["source_name"] = name
         row["imported_at"] = stamp
         row["metrics_version"] = METRICS_VERSION
+        row["import_version"] = IMPORT_VERSION
         # The ids that point at the bean, the recipe and the machine are not
         # roast measurements, so create_roast() does not carry them. Keep them.
         for key in ("beanId", "beanGuid", "recipeId", "recipeGuid", "officialRecipeId",
@@ -654,6 +667,7 @@ def field_report(limit: int = 300, path: str | None = None) -> pd.DataFrame:
 
 
 _VERSION_MARKER = f'%"metrics_version": {METRICS_VERSION}%'
+_IMPORT_MARKER = f'%"import_version": {IMPORT_VERSION}%'
 
 
 def outdated(path: str | None = None) -> int:
@@ -667,6 +681,24 @@ def outdated(path: str | None = None) -> int:
     try:
         row = db.one("SELECT COUNT(*) FROM roasts WHERE data NOT LIKE :marker",
                      {"marker": _VERSION_MARKER}, override=path)
+    except Exception:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def unread(path: str | None = None) -> int:
+    """How many stored roasts were read by an older importer.
+
+    The difference from :func:`outdated` matters. A roast measured by an older
+    version can be put right from the curve already in the database — no file
+    needed. A roast *read* by an older version is missing whatever that version
+    threw away, and only the file itself has it back. So this is the count that
+    means "the Mac has to read its folder again", and the sync checks it rather
+    than waiting for somebody to know to tick a box.
+    """
+    try:
+        row = db.one("SELECT COUNT(*) FROM roasts WHERE data NOT LIKE :marker",
+                     {"marker": _IMPORT_MARKER}, override=path)
     except Exception:
         return 0
     return int(row[0]) if row else 0

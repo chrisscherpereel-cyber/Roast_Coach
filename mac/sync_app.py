@@ -172,6 +172,20 @@ again = st.checkbox(
          "own id and updated in place: nothing is duplicated, and nothing you have "
          "typed in the app is touched.")
 
+# A roast read by an older importer is missing whatever that version discarded,
+# and only the file has it back. The sync does this by itself; saying so first
+# explains why the next run reads five hundred files instead of none.
+try:
+    behind = store.unread()
+except Exception:
+    behind = 0
+if behind and not again:
+    st.info(f"**{behind} roast(s)** were read by an earlier version of this app, which "
+            "kept fewer of RoasTime's fields — the link to the recipe among them. "
+            "Pressing **Sync now** reads their files again by itself; you do not have "
+            "to tick anything. Each is matched by its own id and updated in place.",
+            icon=":material/refresh:")
+
 if st.button("Sync now", type="primary", use_container_width=True):
     log = io.StringIO()
     with st.spinner("Reading RoasTime's folder…"):
@@ -222,6 +236,13 @@ held_columns[2].metric("Recipes", f"{held.get('recipe', 0):,}")
 held_columns[3].metric("Bags", f"{held.get('container', 0):,}")
 if last:
     st.caption(f"Last roast in the database: {str(last)[:16].replace('T', ' ')}")
+
+if total and held.get("bean") and not held.get("recipe"):
+    st.error(
+        "Beans arrived and recipes did not, which means the `recipes/` folder was not "
+        "read. It sits beside `roasts/`, not inside it — check that the folder above "
+        "is RoasTime's own `roasts` folder and not a copy of it.",
+        icon=":material/link_off:")
 
 if total and not held:
     st.error(
