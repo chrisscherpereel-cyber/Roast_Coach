@@ -79,7 +79,9 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #   5  the four colour scales, and advice stored as control moves
 #   6  roast_name, bean and recipe_name kept apart as three columns
 #   7  field_report(): what RoasTime wrote, against what the app reads
-VERSION = 7
+#   8  every id-shaped field on a roast is kept, so a link RoasTime spells in a
+#      way this app has never seen still arrives; add_roasts(again=True) re-reads
+VERSION = 8
 
 
 def _now() -> str:
@@ -255,7 +257,8 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", "replace")).hexdigest()
 
 
-def add_roasts(files: list[dict], path: str | None = None) -> dict:
+def add_roasts(files: list[dict], path: str | None = None,
+               again: bool = False) -> dict:
     """Import roasts from ``[{name, text, modified, size}, …]``.
 
     Files are the app's only input: they come from an upload or a folder the
@@ -263,7 +266,10 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
 
     A file is skipped when its name, size and timestamp match one already
     imported, and again when its contents hash to something already stored —
-    so a copied or renamed file does not become a second roast.
+    so a copied or renamed file does not become a second roast. ``again=True``
+    turns both of those off and re-reads everything: a roast is matched by its
+    own id and updated in place, so nothing is duplicated and nothing typed is
+    lost, but fields this version keeps and an older one did not now arrive.
     """
     from .fields import parse_roast_text
 
@@ -272,8 +278,8 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
         return report
 
     db.prepare(path)
-    known = known_sources(path)
-    hashes = known_hashes(path)
+    known = {} if again else known_sources(path)
+    hashes = set() if again else known_hashes(path)
     existing = {row[0] for row in db.rows("SELECT uid FROM roasts", override=path)}
     who, stamp = _who(), _now()
 
@@ -323,6 +329,18 @@ def add_roasts(files: list[dict], path: str | None = None) -> dict:
                     "preheatTemperature", "recipeName", "beanName"):
             if key in roast_json and key not in row:
                 row[key] = _plain(roast_json[key])
+
+        # And then everything else that looks like a link, whatever it is called.
+        # RoasTime has not used the same name twice for the field that points at a
+        # recipe, and a list of names we thought of is a list that goes stale. An
+        # id is a long non-numeric string; keeping every one of them costs a few
+        # bytes per roast and means a link we have never seen still arrives.
+        for key, value in roast_json.items():
+            if key in row or isinstance(value, (list, dict, bool)) or value is None:
+                continue
+            text = str(value).strip()
+            if len(text) >= 8 and not text.replace(".", "", 1).lstrip("-").isdigit():
+                row[key] = _plain(value)
 
         db.upsert("roasts", "uid", {
             "uid": roast_id,

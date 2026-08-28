@@ -44,8 +44,8 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 7),
-         ("roastcoach/library.py", library, 6),
+NEEDS = (("roastcoach/store.py", store, 8),
+         ("roastcoach/library.py", library, 7),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
@@ -1549,6 +1549,38 @@ def page_data():
         table = pd.DataFrame([{k: v for k, v in item.items()
                                if k not in ("kind", "worst")} for item in cover])
         st.dataframe(table, width="stretch", hide_index=True)
+
+        for item in cover:
+            if item.get("how"):
+                st.caption(
+                    f"{item['what']} matched by: "
+                    + " · ".join(f"{reason} ({count})" for reason, count in item["how"]))
+
+        # Files here, roasts here, and nothing joining them. On this roaster's
+        # RoasTime the roasts carry no field named `recipeId` at all, so the join
+        # is made from whatever id-shaped field the roast does carry — which only
+        # works for roasts imported by a version that kept those fields.
+        stranded = [item for item in cover
+                    if item["files imported"] and not item["roasts matched"]]
+        if stranded:
+            caution(
+                "**" + ", ".join(f"{item['files imported']} {item['what'].lower()} file(s)"
+                                 for item in stranded)
+                + " are stored, and no roast is matched to any of them.** Roasts imported "
+                  "by an earlier version of this app kept only the link fields it knew the "
+                  "names of, and RoasTime does not use those names for recipes. Reading the "
+                  "roast files over — nothing is duplicated, nothing you typed is touched — "
+                  "brings the rest of the links across.",
+                "How to read them again", key="relink", icon=":material/link_off:",
+                steps=("On the Mac that roasts:\n\n"
+                       "```bash\npython3 mac/sync_to_database.py --again\n```\n\n"
+                       "It re-reads every roast file instead of only what has changed, "
+                       "matches each one by its own id, and updates it in place. Then press "
+                       "**Update** in the sidebar.\n\n"
+                       "If the recipe column is still empty afterwards, RoasTime is not "
+                       "recording which recipe a roast was run from — run "
+                       "`python3 mac/what_roastime_has.py` and it will say so in as many "
+                       "words, rather than leaving you to guess."))
 
         short = [item for item in cover
                  if item["file not here"] or (item["files imported"] == 0

@@ -76,8 +76,11 @@ BEAN_FIELDS = {
 # tables(), bean_labels() and link_report(); 3 stops treating a pandas NaN as a
 # bean id called "nan"; 4 reports coverage for every companion kind, not just
 # beans; 5 resolves a roast's bean id against containers as well as beans;
-# 6 reads a recipe's own steps and fields, not only its name.
-VERSION = 6
+# 6 reads a recipe's own steps and fields, not only its name; 7 stops relying on
+# RoasTime calling the link what we expect — any id-shaped field on a roast that
+# names a record we hold is the link, and a recipe that names the roast it came
+# from counts too.
+VERSION = 7
 
 
 def _now() -> str:
@@ -324,15 +327,136 @@ def coffee_lookup(tables: dict) -> dict:
         found[ref_id] = ("bean", record)
     for ref_id, record in (tables.get("container") or {}).items():
         found.setdefault(ref_id, ("container", record))
+
+    # And the other way round: a container says which bean is in it. If a roast
+    # points at a bean whose own file has not arrived, the container holding that
+    # bean still knows what the roaster calls it.
+    for record in (tables.get("container") or {}).values():
+        behind = _first(record, ("beanId", "beanUid", "bean_id"))
+        if behind:
+            found.setdefault(behind, ("container", record))
+
+    # A bean answers to its uid and its guid alike; a roast may quote either.
+    for ref_id, (kind, record) in list(found.items()):
+        for key in ID_KEYS:
+            value = record.get(key)
+            if not _blank(value):
+                found.setdefault(str(value).strip(), (kind, record))
     return found
 
 
+# An id is long and unlike a measurement. This is what stops a scan for
+# "any field that matches a record" from matching a roast number or a power
+# setting that happens to equal something.
+def _id_like(value) -> bool:
+    if _blank(value) or not isinstance(value, (str, int)):
+        return False
+    text = str(value).strip()
+    return len(text) >= 8 and not text.replace(".", "", 1).lstrip("-").isdigit()
+
+
+def _scan_for(roast_row: dict, known: dict) -> str | None:
+    """Any id-shaped field on this roast that names a record we hold.
+
+    RoasTime has changed what it calls the link to a recipe more than once, and
+    on this roaster's files it does not use any of the names we know. Rather than
+    keep guessing names, look at it from the other end: take every id-shaped
+    value on the roast and ask whether it is a record we already have. A false
+    match would need a roast to carry, in some other field, the exact id of a
+    recipe — which is what a link *is*.
+    """
+    if not known:
+        return None
+    for key, value in roast_row.items():
+        if key in ("uid", "guid", "id") or not _id_like(value):
+            continue
+        text = str(value).strip()
+        if text in known:
+            return text
+    return None
+
+
+def id_index(records: dict) -> dict:
+    """Every id a record answers to, pointing at the id it is stored under.
+
+    A RoasTime recipe carries both a `uid` and a `guid`, and they are different
+    strings. Storing it under one and looking it up by the other finds nothing —
+    which is exactly how a recipe whose file was sitting in the library came to
+    show as "no recipe" on the roast that ran it.
+    """
+    found = {}
+    for ref_id, record in (records or {}).items():
+        found.setdefault(str(ref_id), ref_id)
+        for key in ID_KEYS:
+            value = record.get(key)
+            if not _blank(value):
+                found.setdefault(str(value).strip(), ref_id)
+    return found
+
+
+def back_links(records: dict) -> dict:
+    """``{roast id: record id}`` for records that name the roast they came from.
+
+    A recipe carries `referenceRoastGuid`: the roast it was built from. That is
+    the one recipe-to-roast link RoasTime definitely writes, so where a roast
+    carries no recipe id of its own, this at least names the recipe for the roast
+    that *is* the recipe.
+    """
+    found = {}
+    for ref_id, record in (records or {}).items():
+        for key in ("referenceRoastGuid", "referenceRoastUid", "referenceRoastId",
+                    "roastGuid", "roastUid", "roastId"):
+            value = record.get(key)
+            if not _blank(value):
+                found.setdefault(str(value).strip(), ref_id)
+    return found
+
+
+def name_index(records: dict) -> dict:
+    """``{name in lower case: record id}``, only where a name identifies one record."""
+    seen: dict[str, list] = {}
+    for ref_id, record in (records or {}).items():
+        name = _first(record, NAME_KEYS)
+        if name:
+            seen.setdefault(name.strip().lower(), []).append(ref_id)
+    return {name: ids[0] for name, ids in seen.items() if len(ids) == 1}
+
+
+def _recipe_for(roast_row: dict, recipes: dict, backwards: dict,
+                by_name: dict, aliases: dict | None = None) -> tuple[str | None, str]:
+    """Which recipe this roast was run from, and how we know.
+
+    In order of how much it can be trusted: the roast says so; the roast carries
+    the recipe's id under a name we did not expect; the recipe says it came from
+    this roast; the roast and the recipe have the same name.
+    """
+    aliases = aliases if aliases is not None else id_index(recipes)
+
+    ref_id = link_id(roast_row, "recipe")
+    if ref_id and ref_id in aliases:
+        return aliases[ref_id], "id on the roast"
+
+    scanned = _scan_for(roast_row, aliases)
+    if scanned:
+        return aliases[scanned], "id on the roast"
+
+    for key in ("uid", "guid", "id", "roastGuid"):
+        value = roast_row.get(key)
+        if not _blank(value) and str(value).strip() in backwards:
+            return backwards[str(value).strip()], "the recipe names this roast"
+
+    title = _first(roast_row, ("roast_name", "roastName", "name", "title"))
+    if title and title.strip().lower() in by_name:
+        return by_name[title.strip().lower()], "same name"
+    return None, ""
+
+
 def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None,
-                lookup: dict | None = None) -> dict:
+                lookup: dict | None = None, recipe_links: tuple | None = None) -> dict:
     found: dict = {}
 
     lookup = lookup if lookup is not None else coffee_lookup(tables)
-    bean_id = link_id(roast_row, "bean")
+    bean_id = link_id(roast_row, "bean") or _scan_for(roast_row, lookup)
     if bean_id and bean_id in lookup:
         kind, record = lookup[bean_id]
         found["bean_id"] = bean_id
@@ -352,8 +476,19 @@ def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None,
                 if value is not None:
                     found[column] = value
 
+    recipes = tables.get("recipe") or {}
+    backwards, by_name, aliases = recipe_links or (
+        back_links(recipes), name_index(recipes), id_index(recipes))
+    recipe_id, how = _recipe_for(roast_row, recipes, backwards, by_name, aliases)
+    if recipe_id:
+        found["recipe_id"] = recipe_id
+        found["recipe_name"] = _first(recipes[recipe_id], NAME_KEYS) or recipe_id
+        found["recipe_from"] = how
+
     for kind, column in OTHER_KINDS:
-        ref_id = link_id(roast_row, kind)
+        if kind == "recipe":
+            continue
+        ref_id = link_id(roast_row, kind) or _scan_for(roast_row, tables.get(kind, {}))
         if not ref_id:
             continue
         stored = tables.get(kind, {}).get(ref_id)
@@ -389,7 +524,9 @@ def enrich_many(roast_rows, path: str | None = None) -> list[dict]:
     loaded = tables(path)
     lookup = coffee_lookup(loaded)
     labels = bean_labels({ref_id: record for ref_id, (_kind, record) in lookup.items()})
-    return [_enrich_one(row, loaded, labels, lookup) for row in rows]
+    recipes = loaded.get("recipe") or {}
+    links = (back_links(recipes), name_index(recipes), id_index(recipes))
+    return [_enrich_one(row, loaded, labels, lookup, links) for row in rows]
 
 
 def link_report(roast_rows, path: str | None = None, kind: str = "bean") -> dict:
@@ -431,14 +568,32 @@ def coverage(roast_rows, path: str | None = None) -> list[dict]:
     rows = list(roast_rows)
     loaded = tables(path)
     coffees = coffee_lookup(loaded)
+    recipes = loaded.get("recipe") or {}
+    backwards, by_name = back_links(recipes), name_index(recipes)
+    aliases = id_index(recipes)
+
     found = []
     for kind, label, folder in COMPANIONS:
         # A bean id may name a bean or a container of one — both count as found.
         known = coffees if kind == "bean" else loaded.get(kind, {})
         matched = no_id = 0
         missing: dict[str, int] = {}
+        how: dict[str, int] = {}
         for row in rows:
-            ref_id = link_id(row, kind)
+            if kind == "recipe":
+                ref_id, reason = _recipe_for(row, recipes, backwards, by_name, aliases)
+                if ref_id:
+                    matched += 1
+                    how[reason] = how.get(reason, 0) + 1
+                    continue
+                stated = link_id(row, kind)
+                if stated:
+                    missing[stated] = missing.get(stated, 0) + 1
+                else:
+                    no_id += 1
+                continue
+
+            ref_id = link_id(row, kind) or _scan_for(row, known)
             if not ref_id:
                 no_id += 1
             elif ref_id in known:
@@ -452,6 +607,7 @@ def coverage(roast_rows, path: str | None = None) -> list[dict]:
             "file not here": sum(missing.values()),
             "no id on the roast": no_id,
             "worst": sorted(missing.items(), key=lambda pair: -pair[1])[:3],
+            "how": sorted(how.items(), key=lambda pair: -pair[1]),
         })
     return found
 
