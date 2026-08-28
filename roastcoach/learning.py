@@ -176,9 +176,12 @@ def relearn(roasts: pd.DataFrame, path: str | None = None) -> pd.DataFrame:
 
 def slope_for(key: str, path: str | None = None) -> tuple[float, float, int]:
     """(slope, confidence, pairs) for one effect — the stored value if there is one."""
-    from . import store
+    from . import coach, store
 
-    stored = store.effect(key, path)
+    # Inside a review pass every effect size has already been read in one query.
+    stored = (coach.held("effects") or {}).get(key)
+    if stored is None:
+        stored = store.effect(key, path)
     if stored and stored.get("slope") is not None:
         count = int(stored.get("observations") or 0)
         return float(stored["slope"]), count / (count + PRIOR_WEIGHT), count

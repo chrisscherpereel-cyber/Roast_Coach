@@ -73,19 +73,37 @@ BEAN_FIELDS = {
 
 
 # What this file can do — see the note in store.py. 2 adds enrich_many(),
-# tables(), bean_labels() and link_report().
-VERSION = 2
+# tables(), bean_labels() and link_report(); 3 stops treating a pandas NaN as a
+# bean id called "nan".
+VERSION = 3
 
 
 def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+# A roast row that has been through pandas carries NaN where a field was absent,
+# and str(NaN) is "nan" — which is how 387 roasts came to report that they point
+# at a bean called `nan`. Anything in here is "no value", whatever its type.
+_EMPTY = {"", "nan", "none", "null", "undefined", "0", "n/a"}
+
+
+def _blank(value) -> bool:
+    if value is None or value in ("", [], {}):
+        return True
+    try:                                    # NaN is not equal to itself
+        if value != value:
+            return True
+    except Exception:
+        pass
+    return str(value).strip().lower() in _EMPTY
+
+
 def _first(record: dict, keys) -> str | None:
     for key in keys:
         value = record.get(key)
-        if value not in (None, "", [], {}):
-            return str(value)
+        if not _blank(value):
+            return str(value).strip()
     return None
 
 

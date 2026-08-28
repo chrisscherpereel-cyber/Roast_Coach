@@ -45,9 +45,9 @@ def load(token) -> pd.DataFrame:
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
 NEEDS = (("roastcoach/store.py", store, 5),
-         ("roastcoach/library.py", library, 2),
+         ("roastcoach/library.py", library, 3),
          ("roastcoach/metrics.py", metric_rules, 3),
-         ("roastcoach/coach.py", coach, 3),
+         ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
          ("roastcoach/evidence.py", evidence, 1),
          ("roastcoach/recipe.py", recipe, 1))
@@ -445,13 +445,23 @@ def page_coach():
                   help="How often a suggestion you tried moved the measure as far as the coach said it would.")
 
     if st.button("Review my latest roasts", type="primary"):
-        with st.spinner("Reading the roasts…"):
-            for coffee in frame["coffee"].dropna().unique():
-                latest = frame[frame["coffee"] == coffee].sort_values("roasted_at").iloc[-1]
-                coach.review_and_save(frame, latest["uid"])
-            learning.relearn(frame)
-            result = coach.auto_evaluate(frame)
-        st.success(f"Reviewed {frame['coffee'].nunique()} coffee(s); "
+        latest = (frame.dropna(subset=["coffee"]).sort_values("roasted_at")
+                  .groupby("coffee").tail(1))
+        bar = st.progress(0.0, text=f"Reading the most recent roast of "
+                                    f"{len(latest)} coffee(s)…")
+
+        def step(done, total):
+            bar.progress(done / max(total, 1), text=f"Reviewed {done} of {total}")
+
+        reviewed = optional(coach, "review_all", frame, list(latest["uid"]), progress=step)
+        if reviewed is None:                       # an older coach.py, one at a time
+            for uid in latest["uid"]:
+                coach.review_and_save(frame, uid)
+        bar.progress(1.0, text="Re-measuring what your roasts have taught it…")
+        learning.relearn(frame)
+        result = coach.auto_evaluate(frame)
+        bar.empty()
+        st.success(f"Reviewed the latest roast of {len(latest)} coffee(s); "
                    f"graded {result['evaluated']} earlier suggestion(s).")
         refresh()
         st.rerun()
@@ -1035,13 +1045,37 @@ def page_data():
     columns[0].metric("Roasts", info["roasts"])
     columns[1].metric("Coffees", info["coffees"])
     columns[2].metric("Samples stored", f"{info['samples']:,}")
-    columns[3].metric("Last import", (info["imported_at"] or "—")[:16].replace("T", " "))
+    columns[3].metric("Last import", (info["imported_at"] or "—")[:16].replace("T", " "),
+                      help="When a roast was last written into this database, by anything "
+                           "— this browser, another person, or the Mac sync.")
     with columns[4]:
         st.write("")
         if st.button("Re-read", help="Read the database again, in case something else "
                                      "wrote to it just now."):
             refresh()
             st.rerun()
+
+    # How long since anything arrived. A sync that has quietly stopped looks
+    # exactly like "no new roasts", and only this number tells them apart.
+    stamp = info.get("imported_at")
+    if stamp:
+        try:
+            landed = pd.to_datetime(str(stamp))
+            hours = (pd.Timestamp.now(tz=landed.tz) - landed).total_seconds() / 3600
+        except Exception:
+            hours = None
+        if hours is not None and hours > 36:
+            st.warning(
+                f"**Nothing new has arrived for {hours / 24:.0f} day(s).** If you have "
+                "roasted since then, the Mac sync is not running. On that Mac:",
+                icon=":material/sync_problem:")
+            st.code("tail -20 ~/Library/Logs/roast-coach-sync.log   # what it did last\n"
+                    "launchctl list | grep roastcoach               # is it scheduled\n"
+                    "python3 mac/sync_to_database.py                # run it now, and watch",
+                    language="bash")
+            st.caption("The last line prints how many roasts it sent and which database it "
+                       "sent them to — if that database is not the one named below, that is "
+                       "the whole problem.")
 
     if info["roasts"] and len(frame) != info["roasts"]:
         st.warning(f"{info['roasts']} roasts are stored but only {len(frame)} could be "
@@ -1290,11 +1324,26 @@ def page_data():
         if missing:
             worst = sorted(link["missing"].items(), key=lambda pair: -pair[1])[:5]
             st.warning(
-                f"{missing} roast(s) point at a bean whose file has not arrived: "
-                + ", ".join(f"`{ref}` ({count})" for ref, count in worst)
-                + ". Sync the `beans` folder — `mac/sync_to_database.py` sends it with the "
-                  "roasts, or drop the whole RoasTime folder onto the box above.",
+                f"**{missing} roast(s) name a bean whose file has not been imported.** "
+                "Those roasts fall back to a name read off the roast title, which is why "
+                "one coffee can appear under several headings.\n\n"
+                "Most likely you imported the `roasts` folder on its own. The bean files "
+                "live *beside* it, not inside it:",
                 icon=":material/link_off:")
+            st.code("~/Library/Application Support/roast-time/\n"
+                    "├── roasts/     ← what you imported\n"
+                    "├── beans/      ← what is missing\n"
+                    "├── recipes/\n"
+                    "└── containers/", language=None)
+            st.markdown(
+                "**Two ways to fix it, both one-off:**\n\n"
+                "1. Drag the whole **`roast-time`** folder onto the box above — not "
+                "`roasts`. Everything that is not a roast is sorted into beans, recipes "
+                "and machines by itself.\n"
+                "2. Or run the Mac sync, which sends the sibling folders with every "
+                "batch: `python3 mac/sync_to_database.py`")
+            st.caption("Unmatched ids, most common first: "
+                       + ", ".join(f"`{ref}` ({count})" for ref, count in worst))
 
     with st.expander("Manage stored roasts"):
         st.caption("Removing roasts here does not touch RoasTime — the app only ever reads "

@@ -18,6 +18,9 @@ roast, and that is what lets the app get better at this.
 
 from __future__ import annotations
 
+import threading
+from contextlib import contextmanager
+
 import numpy as np
 import pandas as pd
 
@@ -42,8 +45,9 @@ TOLERANCE = 0.35  # a prediction counts as met within this share of the intended
 
 # What this file can do — see the note in store.py. 2 reads the phase bands from
 # metrics.py and judges them at the precision shown; 3 compares against the
-# bean's own baseline where it exists and says which comparison it used.
-VERSION = 3
+# bean's own baseline where it exists and says which comparison it used;
+# 4 adds review_all()/review_pass(), which reads the shared tables once.
+VERSION = 4
 
 
 def _value(row, name, default=np.nan):
@@ -120,9 +124,44 @@ def metric_value(row, metric: str):
     return _value(row, metric)
 
 
+# ---------------------------------------------------------------------------
+# One review pass, one read of the small tables
+#
+# Every rule asks for the rule scoreboard, and several ask for a learned effect
+# size. Reviewing forty coffees that way is some six hundred round trips, which
+# on a database in another country is the difference between a second and a
+# spinner that looks like a hang. Inside a pass the two small tables are read
+# once and shared.
+#
+# Thread-local because Streamlit serves several people from one process.
+# ---------------------------------------------------------------------------
+
+_pass = threading.local()
+
+
+@contextmanager
+def review_pass(path: str | None = None):
+    """Read the scoreboard and the effect sizes once for everything inside."""
+    previous = getattr(_pass, "held", None)
+    _pass.held = {"board": store.rule_scoreboard(path),
+                  "effects": {row["key"]: dict(row)
+                              for _, row in store.effects(path).iterrows()}}
+    try:
+        yield _pass.held
+    finally:
+        _pass.held = previous
+
+
+def held(name):
+    """What this pass already read, if a pass is open."""
+    return (getattr(_pass, "held", None) or {}).get(name)
+
+
 def _confidence(rule_id: str, evidence: float, path: str | None = None) -> float:
     """Blend the evidence behind the magnitude with the rule's own track record."""
-    board = store.rule_scoreboard(path)
+    board = held("board")
+    if board is None:
+        board = store.rule_scoreboard(path)
     record = 0.5
     if not board.empty and rule_id in set(board["rule_id"]):
         row = board[board["rule_id"] == rule_id].iloc[0]
@@ -593,6 +632,23 @@ def review(roasts: pd.DataFrame, roast_id: str, path: str | None = None) -> list
         if item:
             found.append(item)
     return sorted(found, key=lambda item: -(item.get("confidence") or 0))
+
+
+def review_all(roasts: pd.DataFrame, roast_ids, path: str | None = None, progress=None):
+    """Review several roasts in one pass, reading the shared tables once.
+
+    Forty coffees reviewed one at a time is some six hundred small queries; in a
+    pass it is two. On a database in another country that is the difference
+    between a moment and a spinner nobody trusts.
+    """
+    ids = list(roast_ids)
+    done = []
+    with review_pass(path):
+        for position, roast_id in enumerate(ids):
+            done.append(review_and_save(roasts, roast_id, path))
+            if progress:
+                progress(position + 1, len(ids))
+    return done
 
 
 def review_and_save(roasts: pd.DataFrame, roast_id: str, path: str | None = None) -> list[dict]:

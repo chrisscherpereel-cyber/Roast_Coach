@@ -729,32 +729,42 @@ def save_recommendations(roast_id: str, coffee: str, items: list[dict],
     """
     db.run("DELETE FROM recommendations WHERE roast_id = :id AND status = 'open'",
            {"id": roast_id}, override=path)
+    if not items:
+        return 0
+
+    # One round trip for the lot rather than two per suggestion. Reviewing forty
+    # coffees used to be several hundred small writes, which over a hosted
+    # database is what a spinner that never stops is made of.
     stamp = _now()
-    for item in items:
-        db.run(
-            """INSERT INTO recommendations
-               (roast_id, coffee, rule_id, created_at, headline, finding, action, reason,
-                target_metric, current_value, predicted_value, direction, confidence, basis,
-                moves)
-               VALUES (:roast_id, :coffee, :rule_id, :created_at, :headline, :finding, :action,
-                       :reason, :target_metric, :current_value, :predicted_value, :direction,
-                       :confidence, :basis, :moves)""",
-            {"roast_id": roast_id, "coffee": coffee, "rule_id": item["rule_id"],
-             "created_at": stamp, "headline": item["headline"], "finding": item["finding"],
-             "action": item["action"], "reason": item.get("reason"),
-             "target_metric": item.get("target_metric"),
-             "current_value": _plain(item.get("current_value")),
-             "predicted_value": _plain(item.get("predicted_value")),
-             "direction": item.get("direction"),
-             "confidence": _plain(item.get("confidence")), "basis": item.get("basis"),
-             "moves": json.dumps([_plain(m) for m in (item.get("moves") or [])])},
-            override=path)
-        db.run(
-            """INSERT INTO rule_stats (rule_id, suggested, updated_at)
-               VALUES (:rule_id, 1, :updated_at)
-               ON CONFLICT (rule_id) DO UPDATE SET suggested = rule_stats.suggested + 1,
-                 updated_at = EXCLUDED.updated_at""",
-            {"rule_id": item["rule_id"], "updated_at": stamp}, override=path)
+    rows = [{
+        "roast_id": roast_id, "coffee": coffee, "rule_id": item["rule_id"],
+        "created_at": stamp, "headline": item["headline"], "finding": item["finding"],
+        "action": item["action"], "reason": item.get("reason"),
+        "target_metric": item.get("target_metric"),
+        "current_value": _plain(item.get("current_value")),
+        "predicted_value": _plain(item.get("predicted_value")),
+        "direction": item.get("direction"),
+        "confidence": _plain(item.get("confidence")), "basis": item.get("basis"),
+        "moves": json.dumps([_plain(m) for m in (item.get("moves") or [])]),
+    } for item in items]
+
+    db.run(
+        """INSERT INTO recommendations
+           (roast_id, coffee, rule_id, created_at, headline, finding, action, reason,
+            target_metric, current_value, predicted_value, direction, confidence, basis,
+            moves)
+           VALUES (:roast_id, :coffee, :rule_id, :created_at, :headline, :finding, :action,
+                   :reason, :target_metric, :current_value, :predicted_value, :direction,
+                   :confidence, :basis, :moves)""",
+        rows, override=path)
+
+    db.run(
+        """INSERT INTO rule_stats (rule_id, suggested, updated_at)
+           VALUES (:rule_id, 1, :updated_at)
+           ON CONFLICT (rule_id) DO UPDATE SET suggested = rule_stats.suggested + 1,
+             updated_at = EXCLUDED.updated_at""",
+        [{"rule_id": item["rule_id"], "updated_at": stamp} for item in items],
+        override=path)
     return len(items)
 
 
