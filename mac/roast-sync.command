@@ -35,20 +35,43 @@ copy_them() {
 
   # Timestamps have to survive the copy: they are how the app tells a roast it
   # has already read from one that has changed. -a and -p both keep them.
+  # RoasTime writes its files with NO extension at all — `roasts/28050077-…`.
+  # Copying only *.json therefore copied nothing whatsoever. Take every ordinary
+  # file and leave out only RoasTime's own index, which is not a roast.
   if command -v rsync >/dev/null 2>&1; then
-    rsync -a --include='*.json' --include='*.csv' --exclude='*' "$SOURCE/" "$TARGET/" || return 1
+    rsync -a --exclude='index.db*' --exclude='.*' "$SOURCE/" "$TARGET/" || return 1
   else
     copied=0
-    for file in "$SOURCE"/*.json "$SOURCE"/*.csv; do
-      [ -e "$file" ] || continue
+    for file in "$SOURCE"/*; do
+      [ -f "$file" ] || continue
+      case "$(basename "$file")" in index.db*|.*) continue ;; esac
       cp -p "$file" "$TARGET/" || return 1
       copied=$((copied + 1))
     done
-    [ "$copied" -gt 0 ] || { echo "No .json or .csv roast files in $SOURCE."; return 1; }
+    [ "$copied" -gt 0 ] || { echo "No roast files in $SOURCE."; return 1; }
   fi
 
-  count=$(find "$TARGET" -maxdepth 1 -type f \( -name '*.json' -o -name '*.csv' \) | wc -l)
-  echo "$(date '+%Y-%m-%d %H:%M')  $(echo "$count" | tr -d ' ') roast file(s) in $TARGET"
+  # The bean, recipe and machine files live beside the roasts, and without them
+  # a roast has no coffee to be grouped under — only a name read off its title.
+  # Copy them into subfolders of the same target so one upload carries the lot.
+  PARENT="$(dirname "$SOURCE")"
+  for extra in beans recipes officialRecipes containers containerGroups userProfiles; do
+    [ -d "$PARENT/$extra" ] || continue
+    mkdir -p "$TARGET/$extra" || continue
+    if command -v rsync >/dev/null 2>&1; then
+      rsync -a --exclude='.*' "$PARENT/$extra/" "$TARGET/$extra/" || true
+    else
+      for file in "$PARENT/$extra"/*; do
+        [ -e "$file" ] || continue
+        cp -p "$file" "$TARGET/$extra/" || true
+      done
+    fi
+  done
+
+  count=$(find "$TARGET" -maxdepth 1 -type f ! -name '.*' ! -name 'index.db*' | wc -l)
+  beans=$(find "$TARGET/beans" -type f ! -name '.*' 2>/dev/null | wc -l)
+  echo "$(date '+%Y-%m-%d %H:%M')  $(echo "$count" | tr -d ' ') roast file(s) and \
+$(echo "$beans" | tr -d ' ') bean file(s) in $TARGET"
 }
 
 # Called by the scheduler with --quiet: just copy, say one line, leave.

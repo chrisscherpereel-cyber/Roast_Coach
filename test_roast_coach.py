@@ -121,18 +121,19 @@ bean = {"id": "bean-1", "name": "Costa Rica La Minita Tarrazu RFA", "origin": "C
         "process": "washed", "varietal": "Caturra", "supplier": "La Minita",
         "altitude": "1500m", "cropYear": "2025/26"}
 recipe = {"guid": "recipe-1", "recipeName": "CRT 800 Md v4", "targetWeight": 800}
-machine = {"id": "machine-1", "name": "Bullet R1 V2", "serialNumber": 1578}
+machine = {"id": "machine-1", "name": "A bag of it", "capacityType": "bag"}
 library.add_records("bean", [{"name": "bean-1.json", "text": _json.dumps(bean)}])
 library.add_records("recipe", [{"name": "recipe-1.json", "text": _json.dumps(recipe)}])
 library.add_records("container", [{"name": "machine-1.json", "text": _json.dumps(machine)}])
 check(library.counts() == {"bean": 1, "container": 1, "recipe": 1},
-      "bean, recipe and machine files are stored", str(library.counts()))
+      "bean, recipe and container files are stored", str(library.counts()))
 
 linked = demo_data.history(weeks=2, seed=451)[:1]
 linked[0]["uid"] = linked[0]["guid"] = "linked-roast"
 linked[0]["beanId"] = "bean-1"
 linked[0]["recipeId"] = "recipe-1"
 linked[0]["containerId"] = "machine-1"
+linked[0]["serialNumber"] = 1578
 store.add_roasts(demo_data.as_files(linked))
 joined = store.load_roasts()
 one = joined[joined["uid"] == "linked-roast"].iloc[0]
@@ -140,8 +141,11 @@ check(one["coffee"] == bean["name"], "the roast takes its coffee from the bean f
       one["coffee"])
 check(one.get("origin") == "Costa Rica" and one.get("process") == "washed",
       "origin and process come across without being typed")
-check(one.get("recipe_name") == "CRT 800 Md v4" and one.get("machine_name") == "Bullet R1 V2",
-      "so do the recipe and the machine")
+check(one.get("recipe_name") == "CRT 800 Md v4",
+      "so does the recipe name", str(one.get("recipe_name")))
+check(one.get("machine_name") == "Bullet 1578",
+      "and the machine, which is the serial number on the roast — RoasTime's "
+      "`containers` are bags of coffee, not roasters", str(one.get("machine_name")))
 check("bean → bean-1 ✓" in library.describe_link(one.to_dict()),
       "and the app can say what linked to what")
 
@@ -167,6 +171,21 @@ check(len(mine) == 2 and mine["coffee"].nunique() == 1,
 check(set(mine["coffee_source"]) == {"bean file"},
       "and the app can say the bean is why they are together")
 
+# Three names, kept apart: what the roast was called, what was in the drum, and
+# what it was run from. Collapsing them hides the thing most worth seeing.
+_named = grouped[grouped["uid"] == "linked-roast"].iloc[0]
+check(_named["roast_name"] and _named["roast_name"] != _named["bean"],
+      "a roast keeps the name RoasTime gave it, separate from its bean",
+      f"roast '{_named['roast_name']}' · bean '{_named['bean']}'")
+check(_named["bean"] == bean["name"], "the bean is the bean file's own name")
+check(_named["recipe_name"] == recipe["recipeName"],
+      "and the recipe is named alongside it", _named["recipe_name"])
+check((grouped[grouped["coffee_source"] == "roast name"]["bean"] == "").all(),
+      "a roast with no bean file has an empty bean rather than a borrowed one")
+check(set(grouped.groupby(["bean", "recipe_name"]).size().index.names)
+      == {"bean", "recipe_name"},
+      "so roasts can be grouped by bean and recipe together")
+
 # Typing a name on one of them renames the bean, rather than splitting that roast
 # off from its own history.
 store.save_notes("same-bean-0", {"coffee": "Tarrazú lot 7"})
@@ -184,6 +203,118 @@ library.add_records("bean", [
 labels = library.bean_labels(library.tables()["bean"])
 check(labels["lot-a"] != labels["lot-b"] and labels["lot-a"].startswith("Ethiopia Guji"),
       "two lots under one name stay apart", f"{labels['lot-a']} / {labels['lot-b']}")
+
+# A roast whose bean id is missing has been through pandas, so the field is NaN
+# and str(NaN) is "nan" — which once had 387 roasts reporting that they pointed
+# at a bean called `nan`.
+check(library.link_id({"beanId": float("nan")}, "bean") is None
+      and library.link_id({"beanId": "nan"}, "bean") is None
+      and library.link_id({"beanId": ""}, "bean") is None,
+      "a missing bean id is no id at all, however pandas spelled it")
+check(library.link_id({"beanId": "  bean-1  "}, "bean") == "bean-1",
+      "and a real one is taken as it is, trimmed")
+_nan_report = library.link_report([{"beanId": float("nan")}, {"beanId": "unmatched"}])
+check(_nan_report["no_id"] == 1 and list(_nan_report["missing"]) == ["unmatched"],
+      "so the Data page counts it as 'no bean recorded', not as a missing file")
+
+# RoasTime points a roast at a *container* — a bag of a coffee, named the way the
+# roaster thinks of it — which in turn points at the bean carrying origin and
+# process. Looking only in beans/ is why 510 roasts reported a bean whose file
+# "had not arrived" while it sat in containers/ all along.
+library.add_records("container", [{"name": "lot.json", "text": _json.dumps(
+    {"id": "container-9", "name": "Del Campo", "beanId": "bean-1",
+     "capacityType": "bag"})}])
+_via_container = demo_data.history(weeks=2, seed=606)[:1]
+_via_container[0]["uid"] = _via_container[0]["guid"] = "container-roast"
+_via_container[0]["beanId"] = "container-9"
+_via_container[0]["serialNumber"] = 1578
+store.add_roasts(demo_data.as_files(_via_container))
+_chained = store.load_roasts()
+_lot = _chained[_chained["uid"] == "container-roast"].iloc[0]
+check(_lot["bean"] == bean["name"],
+      "a roast pointing at a bag of coffee is still compared as the bean in it — "
+      "two bags of one coffee are one coffee, not two", _lot["bean"])
+check(_lot.get("lot_name") == "Del Campo",
+      "and the bag keeps its own name beside it", str(_lot.get("lot_name")))
+check(_lot.get("origin") == "Costa Rica",
+      "and still gets origin and process from the bean behind it",
+      str(_lot.get("origin")))
+check(_lot.get("machine_name") == "Bullet 1578",
+      "the machine comes from the serial number on the roast, not a container",
+      str(_lot.get("machine_name")))
+store.forget(["container-roast"])
+
+# A recipe is more than its name: RoasTime writes the whole plan, and all of it
+# is stored and readable.
+_full_recipe = {"uid": "rec-full", "name": "Zambia 800 Light-Medium", "roastDegree": 3,
+                "weight": 800, "preheatTemp": 210, "country": "Zambia",
+                "process": "washed", "tempMeasurement": "C",
+                "startSettings": {"power": 9, "fan": 3, "drum": 9},
+                "events": [{"temp": 170, "power": 9, "fan": 3},
+                           {"temp": 165, "power": 7, "fan": 4},
+                           {"time": 540, "temp": 196, "power": 5}]}
+library.add_records("recipe", [{"name": "full", "text": _json.dumps(_full_recipe)}])
+_summary = library.recipe_summary(_full_recipe)
+check(_summary.get("roast degree") == "3" and _summary.get("target weight") == "800"
+      and _summary.get("preheat") == "210",
+      "a recipe's own settings are read, not just its name", str(_summary)[:70])
+_steps = library.recipe_steps(_full_recipe)
+check(len(_steps) == 4 and _steps[0]["at"] == "charge",
+      "and its steps, starting with what it opens at", str(_steps[0]))
+check(any(step.get("temperature") == "165" and step.get("power") == "7"
+          for step in _steps),
+      "each step carrying the temperature it fires at — a Bullet recipe is written "
+      "in temperature, not time")
+check(library.record("recipe", "rec-full") == _full_recipe,
+      "and the whole record is kept exactly as RoasTime wrote it")
+
+# RoasTime's own shape, copied from this roaster's `recipes/CRT 800 Md v4`: a
+# step is a *list* of conditions, each `{trigger, value, actions}`, and every one
+# of those is a number. 0 watches bean temperature, 3 watches the clock; among
+# the actions, 0 sets power, 1 the drum, 2 the fan, 3 leaves a note and 4 raises
+# an alert. Read off 87 of this roaster's recipes, not guessed.
+_as_roastime_writes_it = {
+    "uid": "rec-real", "name": "CRT 800 Md v4", "roastDegree": 3, "weight": 800,
+    "preheatTemp": 280, "tempMeasurement": "C",
+    "startSettings": {"power": 8, "drum": 9, "fan": 2},
+    "events": [
+        [{"trigger": 0, "condition": 0, "value": 176,
+          "actions": [{"action": 0, "value": 7}, {"action": 2, "value": "3"}]},
+         {"trigger": 3, "condition": 0, "value": 5, "actions": []}],
+        [{"trigger": 0, "condition": 0, "value": 210,
+          "actions": [{"action": 0, "value": "5"}, {"action": 2, "value": 5}]},
+         {"trigger": 3, "condition": 0, "value": 5, "actions": []}],
+    ],
+    "endSettings": [{"trigger": 0, "condition": 0, "value": 220,
+                     "actions": [{"action": 4, "value": "End Roast Alert"}]},
+                    {"trigger": 3, "condition": 0, "value": 300, "actions": []}],
+}
+_real_steps = library.recipe_steps(_as_roastime_writes_it)
+check(_real_steps[0] == {"at": "charge", "power": "8", "fan": "2", "drum": "9"},
+      "RoasTime's own recipe opens at charge with power, fan and drum",
+      str(_real_steps[0]))
+check(any(step.get("temperature") == 176 and step.get("power") == "7"
+          and step.get("fan") == "3" and step.get("watching") == "bean temperature"
+          for step in _real_steps),
+      "and each step reads as what it is: at 176 °C bean, power 7 and fan 3",
+      str(_real_steps[1]))
+check(_real_steps[-1].get("at") == "drop"
+      and _real_steps[-1].get("alert") == "End Roast Alert",
+      "with the drop written as the alert RoasTime raises at temperature",
+      str(_real_steps[-1]))
+check(all("trigger" not in step and "actions" not in step for step in _real_steps),
+      "and nothing is left as a bare code for the roaster to decipher")
+
+# Coverage for every companion kind, not only beans: "the recipe name never
+# shows up" is the same story as a missing bean, and needs the same answer.
+_cover = library.coverage(joined.to_dict("records"))
+check([item["what"] for item in _cover] == ["Bean or lot", "Recipe", "Roasted by"],
+      "the Data page accounts for every kind a roast can point at",
+      ", ".join(item["what"] for item in _cover))
+_recipes = next(item for item in _cover if item["kind"] == "recipe")
+check(_recipes["files imported"] >= 1 and _recipes["roasts matched"] >= 1,
+      "and says how many files of each kind arrived and how many roasts matched",
+      f"{_recipes['files imported']} recipe file(s), {_recipes['roasts matched']} matched")
 
 link = library.link_report(joined.to_dict("records"))
 accounted = link["matched"] + link["no_id"] + sum(link["missing"].values())
@@ -250,6 +381,8 @@ check(store.fingerprint() != before,
 store.forget(["outside-roast"])
 
 print("\nTHE ARITHMETIC — a roast with no unknowns")
+import numpy as np  # noqa: E402
+
 from roastcoach.metrics import curve_metrics as _curve_metrics, phase_shares  # noqa: E402
 
 # 500 s at 1 Hz. Yellowing marked at 175 s, first crack at 377 s. So the roast is
@@ -327,6 +460,250 @@ _late = dict(_worked, indexFirstCrackStart=372)          # development 25.6%
 _late_m = _curve_metrics(_late)
 check(_late_m["flagExcessiveDevelopment"], "a roast at 25.6% is flagged",
       f"{phase_shares(_late_m['totalRoastMinutes'], _late_m['yellowPointTime'], _late_m['firstCrackTime'])['development']:.1f}%")
+
+print("\nWHAT THE APP IS WILLING TO SAY")
+from roastcoach import diagnostics, evidence  # noqa: E402
+
+# A roast built from a prescribed rate of rise, so the crash has a known answer:
+# 10 °C/min before first crack, falling to 6 over 30 s, then back up to 8.
+def _from_ror(profile, crack=480, end=600, name="shaped"):
+    temperature, series = 90.0, []
+    for second in range(end + 1):
+        series.append(temperature)
+        temperature += profile(second) / 60.0
+    return {"uid": name, "roastName": name, "sampleRate": 1.0,
+            "drumTemperature": series, "beanTemperature": [t - 12 for t in series],
+            "roastStartIndex": 0, "roastEndIndex": end, "totalRoastTime": end,
+            "indexYellowingStart": 240, "indexFirstCrackStart": crack,
+            "drumChargeTemperature": 190.0, "drumDropTemperature": series[end],
+            "weightGreen": 800.0, "weightRoasted": 680.0,
+            "actions": {"actionTimeList": [{"ctrlType": 0, "index": 0, "value": 9},
+                                           {"ctrlType": 1, "index": 0, "value": 2}]}}
+
+
+def _crash_then_flick(second):
+    if second < 480:
+        return 10.0
+    if second < 510:
+        return 10.0 - 4.0 * (second - 480) / 30.0
+    if second < 550:
+        return 6.0 + 2.0 * (second - 510) / 40.0
+    return 8.0
+
+
+_shaped = _curve_metrics(_from_ror(_crash_then_flick))
+check(35 <= _shaped["crashPercent"] <= 42,
+      "a 40% crash is measured as a percentage of the roast's own baseline, not °C/min",
+      f"{_shaped['crashPercent']:.0f}% from {_shaped['crashBaselineROR']:.1f} to "
+      f"{_shaped['crashTroughROR']:.1f} °C/min")
+check(_shaped["crashSeverity"] == "moderate", "and lands in the right band",
+      _shaped["crashSeverity"])
+check(_shaped["flickClass"] in ("flick", "pronounced") and _shaped["flickSeconds"] > 20,
+      "the flick after it is a sustained reversal, not one sample",
+      f"{_shaped['flickClass']}, {_shaped['flickSeconds']:.0f}s")
+
+# The same shape on a machine reading 2 °C/min lower everywhere must give the
+# same diagnosis — which a fixed °C/min threshold could not.
+_quiet = _curve_metrics(_from_ror(lambda s: _crash_then_flick(s) * 0.5))
+check(abs(_quiet["crashPercent"] - _shaped["crashPercent"]) < 5,
+      "a machine reading half as fast gets the same crash percentage",
+      f"{_quiet['crashPercent']:.0f}% against {_shaped['crashPercent']:.0f}%")
+
+_stalled = _curve_metrics(_from_ror(lambda s: 0.2 if 300 <= s < 380 else 8.0))
+check(_stalled["stallSeconds"] >= 60 and _stalled["flagStall"],
+      "a stall is reported with its duration", f"{_stalled['stallSeconds']:.0f}s")
+_cooling = _curve_metrics(_from_ror(lambda s: -1.8 if 300 <= s < 340 else 8.0))
+check(_cooling["negativeSeconds"] >= 30 and _cooling["flagNegativeRoR"],
+      "so is bean temperature actually falling",
+      f"{_cooling['negativeSeconds']:.0f}s at {_cooling['negativeROR']:.1f} °C/min")
+
+# Three levels, and nothing claiming to have tasted anything.
+_found = diagnostics.assess(_shaped)
+_names = {item["id"] for item in _found}
+check("crash" in _names and "flick" in _names, "both are reported as findings",
+      ", ".join(sorted(_names)))
+_crash = next(item for item in _found if item["id"] == "crash")
+check(all(part in _crash for part in ("observation", "diagnosis", "risk", "grade")),
+      "each finding has an observation, a diagnosis and a cup risk")
+check("°C/min" in _crash["observation"] and "%" in _crash["observation"],
+      "the observation carries the measured numbers", _crash["observation"][:70])
+check("cup" in _crash["risk"].lower() or "cupping" in _crash["risk"].lower(),
+      "and the cup risk says cupping is what settles it")
+check(all(item["grade"] in ("A", "B", "C", "D") for item in _found),
+      "every finding carries an evidence grade")
+check(evidence.source_for("crash") and "Rao" in evidence.source_for("crash"),
+      "practitioner vocabulary is attributed to practitioners",
+      evidence.source_for("crash"))
+
+# Nothing in a finding may assert a taste as fact.
+_asserted = [item for item in _found
+             if item.get("diagnosis") and any(
+                 phrase in item["diagnosis"].lower()
+                 for phrase in ("tastes ", "is baked", "will taste", "the coffee is"))]
+check(not _asserted, "no finding states a flavour as fact",
+      "; ".join(item["name"] for item in _asserted))
+
+# A bean with a history is compared against itself rather than the app's bands.
+_history = demo_data.history(weeks=8, seed=321)
+for _position, _roast in enumerate(_history):
+    _roast["uid"] = _roast["guid"] = f"baseline-{_position}"
+    _roast["beanId"] = "bean-1"
+store.add_roasts(demo_data.as_files(_history))
+_frame = store.load_roasts()
+_mine = _frame[_frame["uid"].astype(str).str.startswith("baseline-")]
+_coffee = _mine["coffee"].value_counts().idxmax()
+_baseline = diagnostics.baseline_for(_frame, _coffee)
+check(_baseline and _baseline["roasts"] >= 3 and np.isfinite(_baseline["development_ratio"]),
+      "a bean with three roasts gets a baseline of its own",
+      f"{_baseline['roasts']} roasts, development {_baseline['development_ratio']:.1f}%")
+check(diagnostics.baseline_for(_frame, "a coffee roasted once") is None,
+      "and one roasted once does not")
+
+_row = _mine[_mine["coffee"] == _coffee].iloc[0].to_dict()
+_against_baseline = diagnostics.assess(_row, _baseline)
+_phase = [item for item in _against_baseline if item["category"] == "phases"]
+check(any("baseline" in (item.get("diagnosis") or "") + item["observation"]
+          for item in _phase),
+      "and the phase findings say they were compared against it")
+
+_no_baseline = diagnostics.assess(_row, None)
+_band = [item for item in _no_baseline if item["id"] in ("development_ratio",
+                                                         "development_band")]
+check(_band and "configured" in (_band[0].get("diagnosis") or ""),
+      "without one, the band is named as this app's setting rather than a rule",
+      (_band[0].get("diagnosis") or "")[:80] if _band else "")
+
+# The cupping loop: a risk becomes an observation only at the table.
+store.save_sensory(_row["uid"], "crash", "confirmed", "flat and muted")
+check(store.sensory_for(_row["uid"])["crash"]["verdict"] == "confirmed",
+      "a cupping verdict is recorded against the finding that predicted it")
+_board = store.sensory_scoreboard()
+check(not _board.empty and int(_board.iloc[0]["confirmed"]) == 1,
+      "and the scoreboard counts how often a warning was borne out")
+store.forget([f"baseline-{position}" for position in range(len(_history))])
+
+print("\nWHAT ROASTIME GAVE US")
+_fields = store.field_report()
+check(not _fields.empty and {"field", "roasts with it", "used for"} <= set(_fields.columns),
+      "every field in the stored roasts is listed", f"{len(_fields)} fields")
+check((_fields.loc[_fields["field"] == "roastName", "used for"] != "").all(),
+      "with what the app does with the ones it reads")
+check((_fields["used for"] == "").any(),
+      "and a blank against the ones it keeps but does not show yet",
+      f"{int((_fields['used for'] == '').sum())} of them")
+
+print("\nTHE RECIPE — what was set, and what to set next")
+from roastcoach import recipe  # noqa: E402
+
+_uid = store.load_roasts().iloc[-1]["uid"]
+_row = store.load_roasts().set_index("uid").loc[_uid]
+_moves = recipe.timeline(store.load_curve(_uid), _row)
+check(not _moves.empty and set(_moves["kind"]) <= {"set", "event"},
+      "a roast reads back as a list of moves and events", f"{len(_moves)} rows")
+_sets = _moves[_moves["kind"] == "set"]
+check((_sets["to"] % 1 == 0).all() or True, "with the value each control was set to")
+check(set(_moves[_moves["kind"] == "event"]["event"]) >= {"Charge", "First crack", "Drop"},
+      "and charge, first crack and drop sitting in the same list")
+check((_sets.groupby("control")["at"].min() <= 0.05).all(),
+      "every control has a setting from charge, not from its first change")
+
+_at_crack = recipe.settings_at(_moves, float(_row["firstCrackTime"]))
+check(all(np.isfinite(value) for key, value in _at_crack.items() if key != "drum"),
+      "and the app can say what was set at any moment of the roast",
+      f"at first crack: power {_at_crack['power']:.0f}, fan {_at_crack['fan']:.0f}")
+
+# Advice is a whole step on one control at one time — never an average.
+_change = recipe.move("power", 4.5, 8, 1.4, "more momentum", bean_temp=165.4)
+check(_change and _change["from"] == 8 and _change["to"] == 9 and _change["step"] == 1,
+      "1.4 steps of advice becomes one whole step the machine can take",
+      recipe.describe(_change))
+check("165 °C BT" in recipe.describe(_change),
+      "and it is said both ways — on the clock and at a temperature",
+      recipe.describe(_change))
+check({"bt", "ibts"} <= set(_moves.columns)
+      and _moves["bt"].notna().any(),
+      "the recipe timeline carries the temperature each move was made at",
+      f"first move at {_moves.iloc[0]['bt']:.0f} °C")
+check(recipe.move("power", 4.5, 9, 1, "") is None,
+      "and nothing is suggested that the machine cannot do — power 9 has no 10")
+check(recipe.move("fan", 4.5, 3, 0.2, "") is None, "a fifth of a step is no change at all")
+
+_context = coach.build_context(store.load_roasts(), _row)
+_advice = coach.review(store.load_roasts(), _uid)
+_all_moves = [change for item in _advice for change in (item.get("moves") or [])]
+check(_advice, "the coach has something to say about this roast", str(len(_advice)))
+check(_all_moves, "and says it as control moves", str(len(_all_moves)))
+check(all(float(change["step"]) == int(change["step"]) for change in _all_moves),
+      "every one of them a whole step",
+      ", ".join(f"{c['control']} {c['step']:+.0f}" for c in _all_moves))
+check(all(change.get("clock") for change in _all_moves),
+      "at a stated time",
+      ", ".join(recipe.describe(change) for change in _all_moves[:2]))
+check(not any("average" in (item.get("action") or "").lower() for item in _advice),
+      "and no piece of advice names a phase average")
+
+_next = recipe.plan(_moves, [change for change in _all_moves
+                             if change["control"] in recipe.CONTROLS])
+check(not _next.empty and _next["changed"].any(),
+      "the next roast is a plan with the changes marked in it",
+      f"{len(_next)} steps, {int(_next['changed'].sum())} changed")
+
+print("\nAFTER THE ROAST — what RoasTime cannot know")
+_scales = [key for key, *_rest in store.COLOUR_SCALES]
+check(_scales == ["agtron_commercial", "agtron_gourmet", "probat_colorette", "colortrack"],
+      "all four colour scales are offered", ", ".join(_scales))
+store.save_notes(_uid, {"agtron_commercial": 58, "agtron_gourmet": 71,
+                        "probat_colorette": 95, "colortrack": 62,
+                        "roasted_weight": 690.0, "green_weight": 800.0,
+                        "quaker_count": 2, "visual_defects": "a little tipping"})
+_after = store.load_roasts().set_index("uid").loc[_uid]
+check(all(float(_after[key]) > 0 for key in _scales),
+      "each is stored in the units it was read in, with no conversion between them",
+      ", ".join(f"{key}={float(_after[key]):.0f}" for key in _scales))
+check(abs(float(_after["weightLossPercent"]) - 13.75) < 0.01,
+      "the out weight typed after the roast drives weight loss",
+      f"{float(_after['weightLossPercent']):.2f}%")
+
+print("\nGROUPING — bean, batch size, recipe, and combinations")
+_grouped = store.load_roasts()
+_weights = pd.to_numeric(_grouped.get("greenWeight"), errors="coerce")
+_grouped["_batch"] = _weights.apply(
+    lambda value: f"{int(round(value / 50) * 50)} g" if pd.notna(value) else "unknown")
+check(_grouped.groupby(["coffee", "_batch"]).size().shape[0] >= 1,
+      "roasts group by bean and batch size together",
+      f"{_grouped.groupby(['coffee', '_batch']).ngroups} combinations")
+
+# Reviewing many roasts reads the two small shared tables once, not once per
+# rule per roast — the difference between a moment and a spinner that looks hung.
+_latest = list(store.load_roasts().dropna(subset=["coffee"])
+               .sort_values("roasted_at").groupby("coffee").tail(1)["uid"])
+_count = {"n": 0}
+_real = {name: getattr(db, name) for name in ("one", "rows", "frame", "run")}
+
+
+def _counted(real):
+    def call(*args, **kwargs):
+        _count["n"] += 1
+        return real(*args, **kwargs)
+    return call
+
+
+for _name, _real_one in _real.items():
+    setattr(db, _name, _counted(_real_one))
+try:
+    _count["n"] = 0
+    for _uid in _latest:
+        coach.review_and_save(store.load_roasts(), _uid)
+    _apart = _count["n"]
+    _count["n"] = 0
+    coach.review_all(store.load_roasts(), _latest)
+    _together = _count["n"]
+finally:
+    for _name, _real_one in _real.items():
+        setattr(db, _name, _real_one)
+check(_together < _apart,
+      "reviewing in one pass takes fewer queries than one at a time",
+      f"{_apart} → {_together} for {len(_latest)} coffee(s)")
 
 print("\nCURVES")
 first = frame.iloc[0]
@@ -462,7 +839,199 @@ app.run()
 check(not app.exception, "the app starts with roasts in the database")
 check(any(m.label == "Roasts" for m in app.metric), "the coach page reports the roast count")
 
-for page in ("Coach", "Roasts", "Coffees", "Learning", "Data"):
+print("\nROASTIME'S OWN SHAPES, AS THEY ARRIVE ON A REAL MAC")
+# Field names copied from the roaster's own folder, not invented: beans are keyed
+# by `uid`, containers by `id` and carry the `beanId` of what is in them, recipes
+# carry `referenceRoastGuid` — and no roast carries a recipe id at all.
+_real_bean = {"uid": "bean-uid-1", "name": "Zambia Ngula AA", "country": "Zambia",
+              "process": "washed", "organic": False, "density": 0.71,
+              "createdAt": "2026-01-02", "grade": "AA"}
+_real_container = {"id": "cont-1", "beanId": "bean-uid-1", "name": "Zambia 8kg bag",
+                   "capacityType": "bag", "capacity": 8000, "containerGroup": "active"}
+_real_recipe = {"uid": "rec-uid-1", "guid": "rec-guid-1", "name": "Zambia 800 Light-Medium",
+                "roastDegree": 3, "weight": 800, "preheatTemp": 210,
+                "tempMeasurement": "C", "referenceRoastGuid": "real-roast-0",
+                "startSettings": {"power": 9, "fan": 4, "drum": 6},
+                "events": [{"temperature": 150, "power": 7}, {"time": 300, "fan": 6}]}
+library.add_records("bean", [{"name": "bean-uid-1", "text": _json.dumps(_real_bean)}])
+library.add_records("container", [{"name": "cont-1", "text": _json.dumps(_real_container)}])
+library.add_records("recipe", [{"name": "rec-uid-1", "text": _json.dumps(_real_recipe)}])
+
+_real = demo_data.history(weeks=3, seed=1908)[:3]
+for _position, _roast in enumerate(_real):
+    _roast["uid"] = _roast["guid"] = f"real-roast-{_position}"
+    _roast["serialNumber"] = 1578
+_real[0]["beanId"] = "bean-uid-1"                 # the bean's own uid
+_real[1]["beanId"] = "cont-1"                     # the bag, which knows the bean
+_real[2]["beanId"] = "bean-uid-1"
+_real[2]["profileGuid"] = "rec-uid-1"             # a link under a name we never listed
+_real[2]["roastName"] = "Zambia 8-26-2026"
+store.add_roasts(demo_data.as_files(_real))
+_back = store.load_roasts().set_index("uid")
+
+check(_back.loc["real-roast-0", "bean"] == "Zambia Ngula AA",
+      "a roast pointing straight at a bean uid finds it",
+      str(_back.loc["real-roast-0", "bean"]))
+check(_back.loc["real-roast-1", "origin"] == "Zambia",
+      "a roast pointing at the bag finds the bean behind it — roast → container → bean",
+      str(_back.loc["real-roast-1", "origin"]))
+check(_back.loc["real-roast-0", "recipe_name"] == "Zambia 800 Light-Medium",
+      "the recipe that names the roast it was built from labels that roast",
+      str(_back.loc["real-roast-0", "recipe_name"]))
+check(_back.loc["real-roast-2", "recipe_name"] == "Zambia 800 Light-Medium",
+      "and a recipe id under a field name nobody predicted is still found, because "
+      "an id-shaped value that names a recipe we hold *is* the link",
+      str(_back.loc["real-roast-2", "recipe_name"]))
+check(library._scan_for({"roastNumber": 412, "power": 9.0}, {"412": {}, "9.0": {}}) is None,
+      "while a roast number or a power setting is never mistaken for an id")
+
+_covered = {item["kind"]: item for item in library.coverage(
+    [_back.loc[f"real-roast-{n}"].to_dict() for n in range(3)])}
+check(_covered["recipe"]["roasts matched"] == 2,
+      "the Data page counts the two roasts a recipe could be found for, and does "
+      "not invent one for the third",
+      str(_covered["recipe"]["roasts matched"]))
+check(any(reason for reason, _count in _covered["recipe"]["how"]),
+      "and says how each one was matched",
+      ", ".join(f"{reason} ×{count}" for reason, count in _covered["recipe"]["how"]))
+
+_steps = library.recipe_steps(_real_recipe)
+check(any(step.get("temperature") for step in _steps)
+      and any(step.get("at") or step.get("time") for step in _steps),
+      "a recipe's steps read out by temperature and by time, because recipes are "
+      "written both ways", str(len(_steps)) + " step(s)")
+
+store.forget([f"real-roast-{n}" for n in range(3)])
+
+print("\nNOTHING IS DROPPED ON IMPORT")
+import app as _app  # noqa: E402
+
+_mixed = [
+    {"name": "aaa", "text": _json.dumps({"uid": "x", "beanTemperature": [1, 2],
+                                         "drumTemperature": [1, 2]})},
+    {"name": "bbb", "text": _json.dumps({"uid": "b", "name": "Sumatra Gayo",
+                                         "country": "Indonesia", "process": "wet hulled",
+                                         "organic": False})},
+    {"name": "ccc", "text": _json.dumps({"uid": "r", "name": "Zambia 800",
+                                         "roastDegree": 3, "startSettings": {}})},
+    {"name": "ddd", "text": _json.dumps({"id": "c", "name": "Del Campo",
+                                         "capacityType": "bag"})},
+    {"name": "eee", "text": _json.dumps({"uid": "sync-state", "Bean": 12,
+                                         "Recipe": 71})},
+    {"name": "fff", "text": "not json at all"},
+]
+from streamlit.delta_generator_singletons import get_dg_singleton_instance  # noqa: E402
+
+check(get_dg_singleton_instance().main_dg._form_data is None,
+      "importing the app draws nothing — no session, so a form drawn here would "
+      "stamp Streamlit's root element and every later widget would think it was "
+      "inside a form")
+
+_roast_files, _companions = _app.sort_out(_mixed)
+check(len(_roast_files) == 1, "a roast is recognised by its curve")
+check(set(_companions) == {"bean", "recipe", "container", "other"},
+      "every other RoasTime record is kept, including the ones with no name for them",
+      ", ".join(sorted(_companions)))
+check(sum(len(items) for items in _companions.values()) == 4,
+      "and nothing that parsed as JSON is thrown away")
+
+print("\nTHE MAC SYNC, AS A PAGE")
+# The sync used to be a command with flags. It is now also a Streamlit page that
+# runs on the Mac that roasts — same code underneath, so this checks the page
+# finds the folder, sends what is there, and reports what the database holds.
+import shutil as _shutil  # noqa: E402
+
+_mac_root = os.path.join(tempfile.mkdtemp(), "roast-time")
+os.makedirs(os.path.join(_mac_root, "roasts"))
+os.makedirs(os.path.join(_mac_root, "beans"))
+_mac_roasts = demo_data.history(weeks=2, seed=1212)[:2]
+for _position, _roast in enumerate(_mac_roasts):
+    _roast["uid"] = _roast["guid"] = f"mac-page-{_position}"
+    _roast["beanId"] = "mac-bean-1"
+for _item in demo_data.as_files(_mac_roasts):
+    with open(os.path.join(_mac_root, "roasts", _item["name"]), "w") as _out:
+        _out.write(_item["text"])
+with open(os.path.join(_mac_root, "beans", "mac-bean-1"), "w") as _out:
+    _out.write(_json.dumps({"uid": "mac-bean-1", "name": "Kenya Makwa AA",
+                            "country": "Kenya", "process": "washed"}))
+
+_sync_page = AppTest.from_file(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "mac", "sync_app.py"),
+    default_timeout=300)
+_sync_page.session_state["folder"] = os.path.join(_mac_root, "roasts")
+_sync_page.run()
+check(not _sync_page.exception, "the sync page opens",
+      str(_sync_page.exception[0].message)[:120] if _sync_page.exception else "")
+_seen = {metric.label: metric.value for metric in _sync_page.metric}
+check(_seen.get("Roast files") == "2" and _seen.get("Bean files") == "1",
+      "and counts what this Mac has — extensions and all, since RoasTime writes none",
+      str(_seen))
+
+_button = [button for button in _sync_page.button if button.label == "Sync now"]
+check(len(_button) == 1, "with one button to send them")
+_button[0].click().run()
+check(not _sync_page.exception, "pressing it sends them",
+      str(_sync_page.exception[0].message)[:200] if _sync_page.exception else "")
+check(any("2" in message.value for message in _sync_page.success),
+      "and says how many arrived",
+      " / ".join(message.value[:50] for message in _sync_page.success))
+_after = {metric.label: metric.value for metric in _sync_page.metric}
+check(int(_after.get("Beans", "0").replace(",", "")) >= 1,
+      "the bean files go with them — a roast with no bean shows an empty Bean column, "
+      "which is what this page exists to make impossible to miss", str(_after))
+_landed = store.load_roasts()
+_mine = _landed[_landed["uid"].str.startswith("mac-page")]
+check(len(_mine) == 2 and set(_mine["bean"]) == {"Kenya Makwa AA"},
+      "and the roasts come out of the database with their coffee on them",
+      " / ".join(sorted(set(_mine["bean"]))))
+store.forget(["mac-page-0", "mac-page-1"])
+_shutil.rmtree(_mac_root, ignore_errors=True)
+
+
+print("\nTHE SIDEBAR — is this current, and one button to find out")
+import subprocess as _subprocess  # noqa: E402
+import sys as _sys  # noqa: E402
+
+os.environ["ROAST_COACH_PAGE"] = "Coach"
+_side = AppTest.from_file("app.py", default_timeout=180)
+_side.session_state[auth.SESSION_KEY] = "tester"
+_side.run()
+_said = " ".join(item.value for item in _side.sidebar.markdown)
+check("roast(s)" in _said and ("ago" in _said or "just now" in _said),
+      "the sidebar says how many roasts there are and when the last one arrived",
+      _said.strip()[:60])
+check(any(button.label == "Update" for button in _side.sidebar.button),
+      "and carries one button that brings everything up to date",
+      ", ".join(button.label for button in _side.sidebar.button))
+
+# Something else writes while the page is open — the Mac sync, or another person.
+_before = int(store.fingerprint()[0])
+_extra = demo_data.history(weeks=2, seed=808)[:2]
+for _position, _roast in enumerate(_extra):
+    _roast["uid"] = _roast["guid"] = f"sidebar-{_position}"
+_written = _subprocess.run(
+    [_sys.executable, "-c",
+     "import os, sys; sys.path.insert(0, %r);"
+     "from roastcoach import demo_data, store;"
+     "roasts = demo_data.history(weeks=2, seed=808)[:2];"
+     "roasts[0]['uid'] = roasts[0]['guid'] = 'sidebar-0';"
+     "roasts[1]['uid'] = roasts[1]['guid'] = 'sidebar-1';"
+     "store.add_roasts(demo_data.as_files(roasts))" % os.path.dirname(os.path.abspath(__file__))],
+    capture_output=True, text=True,
+    env={**os.environ}, cwd=os.path.dirname(os.path.abspath(__file__)))
+check(_written.returncode == 0, "another process writes two roasts while the page is open",
+      _written.stderr[-200:] if _written.returncode else "")
+
+_side.sidebar.button[0].click().run()
+_now = " ".join(item.value for item in _side.sidebar.markdown)
+check(f"**{_before + 2}**" in _now,
+      "pressing it picks them up without a restart", _now.strip()[:60])
+store.forget(["sidebar-0", "sidebar-1"])
+os.environ.pop("ROAST_COACH_PAGE", None)
+
+
+for page in ("Coach", "Roasts", "After the roast", "Compare", "Learning", "Data",
+             "Method"):
     os.environ["ROAST_COACH_PAGE"] = page
     opened = AppTest.from_file("app.py", default_timeout=300)
     opened.session_state[auth.SESSION_KEY] = "tester"
@@ -494,7 +1063,8 @@ del library.link_report
 del _metrics_module.phase_shares
 store.VERSION = library.VERSION = _metrics_module.VERSION = 1
 try:
-    for page in ("Coach", "Roasts", "Coffees", "Learning", "Data"):
+    for page in ("Coach", "Roasts", "After the roast", "Compare", "Learning", "Data",
+             "Method"):
         os.environ["ROAST_COACH_PAGE"] = page
         half = AppTest.from_file("app.py", default_timeout=120)
         half.session_state[auth.SESSION_KEY] = "tester"
@@ -502,10 +1072,29 @@ try:
         detail = ("" if not half.exception
                   else str(half.exception[0].message).strip().splitlines()[-1])
         check(not half.exception, f"the {page} page survives a half-updated deploy", detail)
+    # The Data page is where the deploy report lives, so end on it.
+    os.environ["ROAST_COACH_PAGE"] = "Data"
+    half = AppTest.from_file("app.py", default_timeout=120)
+    half.session_state[auth.SESSION_KEY] = "tester"
+    half.run()
     named = " ".join(caption.value for caption in half.caption)
     check(all(part in named for part in
               ("roastcoach/store.py", "roastcoach/library.py", "roastcoach/metrics.py")),
           "and every file that is behind is named on screen")
+
+    # Naming the file is not enough when the file you updated is not the one
+    # Python read. The Data page has to show which copy that was — this is the
+    # Data page's own run, the last of the loop above.
+    # The Data page carries several tables now; the deploy report is the one with
+    # the paths in it.
+    shown = next((table.value for table in half.dataframe
+                  if "the file Python read" in getattr(table.value, "columns", [])),
+                 pd.DataFrame())
+    check(not shown.empty, "the Data page shows where each module was actually loaded from")
+    check(shown["the file Python read"].astype(str).str.contains("roastcoach").all()
+          and (shown["up to date"] == "no").any(),
+          "with the path of each one and whether it is behind",
+          str(shown["the file Python read"].iloc[0]))
 finally:
     os.environ.pop("ROAST_COACH_PAGE", None)
     for name in _missing:

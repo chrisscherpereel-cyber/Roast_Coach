@@ -111,12 +111,25 @@ def sync_companions(roasts_folder: Path) -> dict:
     """
     from roastcoach import library
 
-    parent = roasts_folder.parent
+    # RoasTime keeps them beside the roasts folder. A folder copy — the
+    # roast-sync route — may instead have them inside it, or not at all, so look
+    # in both places and say plainly when there is nothing to find.
+    places = [roasts_folder.parent, roasts_folder]
+    # A roasts folder that was *copied* somewhere has no beans/ beside it. The
+    # real ones are still where RoasTime keeps them, so look there too rather
+    # than reporting nothing and leaving every roast without a coffee.
+    for known in (Path.home() / "Library/Application Support/roast-time",
+                  Path.home() / "Library/Application Support/RoasTime",
+                  Path(os.environ.get("APPDATA", "")) / "roast-time"):
+        if known.is_dir() and known not in places:
+            places.append(known)
     totals: dict[str, int] = {}
+    found_any = False
     for name, kind in library.KINDS.items():
-        folder = parent / name
-        if not folder.is_dir():
+        folder = next((place / name for place in places if (place / name).is_dir()), None)
+        if folder is None:
             continue
+        found_any = True
         files = []
         for path in sorted(folder.iterdir()):
             if not path.is_file() or path.name.startswith("."):
@@ -131,11 +144,24 @@ def sync_companions(roasts_folder: Path) -> dict:
         if files:
             stored = library.add_records(kind, files)["stored"]
             totals[kind] = totals.get(kind, 0) + stored
+
+    if not found_any:
+        print(f"{time.strftime('%H:%M')}  no beans/ or recipes/ folder beside "
+              f"{roasts_folder} — roasts will import, but they will have no bean to be "
+              f"grouped by. Point --folder at RoasTime's own roasts folder:")
+        print("          ~/Library/Application Support/roast-time/roasts")
     return totals
 
 
-def sync_once(folder: Path, database: str | None) -> dict:
-    url = database or os.environ.get("ROAST_COACH_DATABASE_URL") or stored_database()
+def sync_once(folder: Path, database: str | None, again: bool = False) -> dict:
+    # What was asked for, then what the environment says, then what this Mac has
+    # saved. The saved one is a preference, not an instruction: an environment
+    # that has already named a database — ROAST_COACH_DB for a file, or the URL
+    # itself — is a deliberate choice for this run and must not be overruled by a
+    # setting from months ago.
+    url = database or os.environ.get("ROAST_COACH_DATABASE_URL")
+    if not url and not os.environ.get("ROAST_COACH_DB"):
+        url = stored_database()
     if url:
         os.environ["ROAST_COACH_DATABASE_URL"] = url
 
@@ -146,6 +172,17 @@ def sync_once(folder: Path, database: str | None) -> dict:
         print(f"{time.strftime('%H:%M')}  " +
               ", ".join(f"{count} {kind}(s)" for kind, count in sorted(companions.items())))
 
+    # What the database holds now, not what this run happened to send. "Did the
+    # beans arrive?" is the question every blank Bean column asks, and it should
+    # not need a trip to a web page to answer.
+    from roastcoach import library
+
+    held = library.counts()
+    print(f"{time.strftime('%H:%M')}  the database holds " +
+          (", ".join(f"{count} {kind}(s)" for kind, count in sorted(held.items()))
+           if held else "no bean, recipe or container records at all — "
+                        "every roast will show an empty Bean and Recipe"))
+
     # Roasts measured by an older version of the app still carry its numbers.
     # Nothing needs re-importing — the curves are stored — so put them right here,
     # where nobody is waiting for it.
@@ -155,7 +192,14 @@ def sync_once(folder: Path, database: str | None) -> dict:
               f"current calculations…")
         store.remeasure()
 
-    known = store.known_sources()
+    # `--again` reads every roast file over, rather than only what has changed.
+    # Nothing you have typed is touched — a roast is matched by its own id and
+    # updated in place — but fields the app did not use to keep, such as the link
+    # to a recipe, arrive for roasts imported before it knew to look.
+    known = {} if again else store.known_sources()
+    if again:
+        print(f"{time.strftime('%H:%M')}  reading every roast file again, not only "
+              f"what has changed — this takes a few minutes.")
     files = gather(folder, known)
     if not files:
         print(f"{time.strftime('%H:%M')}  nothing new in {folder.name} "
@@ -163,7 +207,7 @@ def sync_once(folder: Path, database: str | None) -> dict:
         return {"added": 0, "updated": 0, "skipped": 0, "failed": 0, "problems": []}
 
     print(f"{time.strftime('%H:%M')}  reading {len(files)} file(s) from {folder.name}…")
-    report = store.add_roasts(files)
+    report = store.add_roasts(files, again=again)
 
     if report["added"] or report["updated"]:
         frame = store.load_roasts()
@@ -287,6 +331,8 @@ def main() -> None:
     parser.add_argument("--database")
     parser.add_argument("--every", type=float, metavar="MINUTES")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--again", action="store_true",
+                        help="read every roast file over, not only what changed")
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--uninstall", action="store_true")
     options = parser.parse_args()
@@ -301,7 +347,7 @@ def main() -> None:
         return
 
     if not options.every:
-        sync_once(folder, options.database)
+        sync_once(folder, options.database, again=options.again)
         return
 
     print(f"Watching {folder} — every {options.every:g} minutes. Ctrl-C to stop.")

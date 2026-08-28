@@ -9,7 +9,37 @@ can reach in and copy that folder itself — a browser tab has no access to your
 disk until you hand it files. So the way to stop repeating yourself is to have
 something on **your Mac** do the work on a schedule, outside the browser.
 
-Two ways, depending on how far you want to go.
+**Nothing about your Mac stops this** — the restriction was always Chrome's. A
+program running on your own computer reads `~/Library` like any other folder. So
+the answer is to have a small program on this Mac do it, and the friendliest of
+those is a page with a button.
+
+Three ways, depending on how far you want to go.
+
+---
+
+## 0. A page with a Sync now button  ← start here
+
+**`roast-sync-app.command`** — double-click it.
+
+It opens a small page in your browser that is running *on this Mac*, so it can
+read RoasTime's folder directly. The page shows:
+
+- what this Mac has — how many roast, bean and recipe files, counted properly
+  (RoasTime writes its files with no extension, which is what made an older copy
+  script quietly copy nothing);
+- where they are going, and whether that is a real shared database or just a
+  file on this computer;
+- a **Sync now** button, with a tick-box for *read every roast file again* when
+  you have updated the app and want roasts imported by an older version to pick
+  up fields it did not keep;
+- what the database holds afterwards — roasts, beans, recipes, bags — and how
+  many roasts actually found their coffee and their recipe;
+- a switch to have macOS do it every fifteen minutes without the page open.
+
+Leave the Terminal window it opens alone while you use the page; close it when
+you are done. It is the same code as the command line below, so nothing is
+different about the result.
 
 ---
 
@@ -113,3 +143,28 @@ If you have not set up a database, or you would rather nothing ran unattended
 against it, take **1**. It is a plain file copy with nothing to install.
 
 Neither writes to RoasTime's folder. Both only read.
+
+---
+
+## Something is missing and you cannot see why
+
+**`what_roastime_has.py`** — run it and paste the output back:
+
+```bash
+python3 mac/what_roastime_has.py
+```
+
+It prints every folder RoasTime has on this Mac with what is in it, the field
+names in a sample of each kind of file, and then the part that matters: it takes
+the bean and recipe ids your roasts actually carry and *goes looking for them* —
+in the JSON folders, and inside RoasTime's own databases.
+
+That last search is the point. RoasTime is an Electron app, and Electron apps
+keep a great deal in IndexedDB, which on disk is a LevelDB store — `.log` and
+`.ldb` files that look like nonsense in Finder but hold plain JSON inside. If
+your recipe ids turn up there and in no folder, then no amount of folder copying
+will ever bring recipe names across, and the answer is a different importer. If
+they turn up nowhere at all, the names live in your Roast.World account and are
+fetched when RoasTime is online.
+
+It reads and prints. It changes nothing.

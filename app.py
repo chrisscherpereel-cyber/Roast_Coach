@@ -45,7 +45,7 @@ def load(token) -> pd.DataFrame:
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
 NEEDS = (("roastcoach/store.py", store, 8),
-         ("roastcoach/library.py", library, 7),
+         ("roastcoach/library.py", library, 8),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
@@ -1547,7 +1547,7 @@ def page_data():
     if cover:
         st.markdown("### What RoasTime knows, and what arrived")
         table = pd.DataFrame([{k: v for k, v in item.items()
-                               if k not in ("kind", "worst")} for item in cover])
+                               if k not in ("kind", "worst", "how")} for item in cover])
         st.dataframe(table, width="stretch", hide_index=True)
 
         for item in cover:

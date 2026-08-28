@@ -52,9 +52,11 @@ NAME_KEYS = ("name", "beanName", "recipeName", "title", "label", "displayName",
              "nickname", "origin")
 
 # How a roast points at each kind of record.
+# Spelling matters less than it looks: _first() falls back to a case-blind
+# match, which is what finds this roaster's `recipeID` from `recipeId`.
 LINKS = {
     "bean": ("beanId", "beanGuid", "bean_id", "beanUid", "greenBeanId"),
-    "recipe": ("recipeId", "recipeGuid", "recipe_id", "recipeUid",
+    "recipe": ("recipeID", "recipeId", "recipeGuid", "recipe_id", "recipeUid",
                "officialRecipeId", "profileId"),
     "container": ("containerId", "containerGuid", "machineId", "roasterId"),
     "userProfile": ("userProfileId", "userId", "profileId"),
@@ -79,8 +81,11 @@ BEAN_FIELDS = {
 # 6 reads a recipe's own steps and fields, not only its name; 7 stops relying on
 # RoasTime calling the link what we expect — any id-shaped field on a roast that
 # names a record we hold is the link, and a recipe that names the roast it came
-# from counts too.
-VERSION = 7
+# from counts too; 8 works out which id field identifies a record instead of
+# assuming — twenty-six recipes sharing one machine guid were being stored on top
+# of one another — and matches field names case-blind, which is what finds
+# `recipeID`.
+VERSION = 8
 
 
 def _now() -> str:
@@ -105,16 +110,54 @@ def _blank(value) -> bool:
 
 
 def _first(record: dict, keys) -> str | None:
+    """The first of ``keys`` this record actually has, whatever its capitals.
+
+    A roast on this roaster's machine spells the link to its recipe ``recipeID``.
+    Older RoasTime files spell it ``recipeId``. One capital letter is not a
+    different field, and a lookup that thinks it is loses every recipe name in
+    the app while the data sits there in plain sight — so match exactly first,
+    then case-blind.
+    """
     for key in keys:
         value = record.get(key)
         if not _blank(value):
             return str(value).strip()
+
+    folded = {str(key).lower(): key for key in record}
+    for key in keys:
+        actual = folded.get(str(key).lower())
+        if actual is not None and not _blank(record[actual]):
+            return str(record[actual]).strip()
     return None
 
 
 def identity(record: dict) -> tuple[str | None, str | None]:
     """The id a roast would point at, and something human to call it."""
     return _first(record, ID_KEYS), _first(record, NAME_KEYS)
+
+
+def choose_key(records: list) -> str | None:
+    """Which id field actually identifies one record in this batch.
+
+    Not every id on a RoasTime record is the record's own. Twenty-six of this
+    roaster's seventy recipes carry the same `guid` — it belongs to the machine
+    they were written on — while each has a `uid` of its own. Filing them under
+    the first id field in a fixed list therefore stored twenty-six recipes on top
+    of one another, and sixty-one rows came back from eighty-seven files.
+
+    So the field is not assumed, it is worked out: the one whose values are
+    present on every record and different for every record is the one that
+    identifies them. Where none is, the caller falls back to the file name, which
+    is what RoasTime names these files after anyway.
+    """
+    usable = [record for record in records if isinstance(record, dict)]
+    if not usable:
+        return None
+    for key in ID_KEYS:
+        values = [_first({key: record.get(key)}, (key,)) for record in usable]
+        if all(value is not None for value in values) and len(set(values)) == len(values):
+            return key
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -128,9 +171,12 @@ def add_records(kind: str, files: list[dict], path: str | None = None) -> dict:
     Anything that parses as a JSON object is kept. Records without a usable id
     fall back to the file name, so nothing is dropped for want of a field.
     """
-    report = {"stored": 0, "failed": 0, "problems": []}
+    report = {"stored": 0, "failed": 0, "problems": [], "keyed_by": ""}
     stamp = _now()
 
+    # Read the whole batch first, so the id that identifies one record can be
+    # worked out from the records rather than assumed. See :func:`choose_key`.
+    parsed: list[tuple[dict, dict, int]] = []
     for item in files:
         try:
             record = json.loads(item.get("text") or "")
@@ -146,21 +192,27 @@ def add_records(kind: str, files: list[dict], path: str | None = None) -> dict:
         else:
             report["failed"] += 1
             continue
-
         for position, one in enumerate(records):
-            ref_id, name = identity(one)
-            if not ref_id:
-                stem = str(item.get("name") or "record").rsplit(".", 1)[0]
-                ref_id = stem if len(records) == 1 else f"{stem}#{position}"
-            db.upsert("reference", "key", {
-                "key": f"{kind}/{ref_id}",
-                "kind": kind,
-                "ref_id": ref_id,
-                "name": name,
-                "updated_at": stamp,
-                "data": json.dumps(one),
-            }, override=path)
-            report["stored"] += 1
+            parsed.append((item, one, position if len(records) > 1 else -1))
+
+    key_field = choose_key([one for _item, one, _position in parsed])
+    report["keyed_by"] = key_field or "file name"
+
+    for item, one, position in parsed:
+        ref_id = _first(one, (key_field,)) if key_field else None
+        name = _first(one, NAME_KEYS)
+        if not ref_id:
+            stem = str(item.get("name") or "record").rsplit(".", 1)[0]
+            ref_id = stem if position < 0 else f"{stem}#{position}"
+        db.upsert("reference", "key", {
+            "key": f"{kind}/{ref_id}",
+            "kind": kind,
+            "ref_id": ref_id,
+            "name": name,
+            "updated_at": stamp,
+            "data": json.dumps(one),
+        }, override=path)
+        report["stored"] += 1
 
     return report
 
@@ -245,53 +297,70 @@ RECIPE_FIELDS = {
 # What a step inside a recipe might be called, whichever way this version writes
 # it. A Bullet recipe is a list of moves against temperature or time.
 STEP_TIME = ("time", "seconds", "at", "index", "elapsed", "timestamp")
-STEP_TEMPERATURE = ("temp", "temperature", "beanTemperature", "bt", "value",
+STEP_TEMPERATURE = ("temp", "temperature", "beanTemperature", "bt",
                     "targetTemp", "triggerTemp")
 STEP_CONTROLS = {"power": ("power", "p", "heat", "burner"),
                  "fan": ("fan", "f", "airflow"),
                  "drum": ("drum", "d", "drumSpeed", "rpm")}
 
+# RoasTime writes a recipe step as numbers, not words: what to watch for
+# (`trigger`), the number to watch for (`value`), and what to do when it arrives
+# (`actions`, each its own number). These are those numbers, read off this
+# roaster's own seventy recipes — 442 temperature triggers, 470 time triggers,
+# and every action code that appears in any of them.
+TRIGGERS = {0: "bean temperature", 1: "drum temperature", 2: "temperature", 3: "time"}
+ACTIONS = {0: "power", 1: "drum", 2: "fan", 3: "note", 4: "alert"}
+
+
+def _clock(seconds) -> str:
+    try:
+        total = int(float(seconds))
+    except (TypeError, ValueError):
+        return str(seconds)
+    return f"{total // 60}:{total % 60:02d}"
+
+
+def _decode_event(event: dict) -> dict:
+    """One `{trigger, value, actions}` block as something readable."""
+    step: dict = {}
+    trigger = event.get("trigger")
+    value = event.get("value")
+
+    kind = TRIGGERS.get(trigger)
+    if kind == "time":
+        # A step commonly carries a second condition of five seconds, which is
+        # RoasTime holding the setting rather than a step of its own.
+        step["after"] = _clock(value)
+    elif kind:
+        step["temperature"] = value
+        step["watching"] = kind
+
+    for action in event.get("actions") or []:
+        if not isinstance(action, dict):
+            continue
+        name = ACTIONS.get(action.get("action"), f"action {action.get('action')}")
+        held = action.get("value")
+        if held in (None, "", "None"):
+            continue
+        step[name] = str(held).strip()
+    return step
+
 
 def recipe_steps(record: dict) -> list[dict]:
     """A recipe's own steps, in whatever shape this RoasTime version wrote them.
 
-    Bullet recipes are written against *temperature* — "power 7 at 165 °C" — and
+    Bullet recipes are written against *temperature* — "power 7 at 176 °C" — and
     sometimes against time as well, so both are carried through when they are
-    there. Unknown keys are kept rather than guessed at: a step nobody
-    understands is still worth showing.
+    there. Two shapes are read: RoasTime's own, where `events` is a list of steps
+    and each step is a list of `{trigger, value, actions}` blocks, and the plainer
+    `{time, temperature, power, fan}` shape other exports use. A step this app
+    cannot name is still shown, as it was written.
     """
-    steps = []
-    events = record.get("events") or record.get("steps") or record.get("actions") or []
-    if isinstance(events, dict):
-        events = list(events.values())
-
-    for event in events:
-        if not isinstance(event, dict):
-            continue
-        step = {}
-        when = _first(event, STEP_TIME)
-        temperature = _first(event, STEP_TEMPERATURE)
-        if when is not None:
-            step["at"] = when
-        if temperature is not None:
-            step["temperature"] = temperature
-        for control, keys in STEP_CONTROLS.items():
-            value = _first(event, keys)
-            if value is not None:
-                step[control] = value
-        # Anything this app has no name for, kept as it was written.
-        extra = {key: value for key, value in event.items()
-                 if not isinstance(value, (list, dict))
-                 and key not in STEP_TIME + STEP_TEMPERATURE
-                 and not any(key in keys for keys in STEP_CONTROLS.values())}
-        for key, value in list(extra.items())[:4]:
-            step.setdefault(key, value)
-        if step:
-            steps.append(step)
+    steps: list[dict] = []
 
     start = record.get("startSettings")
     if isinstance(start, dict) and start:
-        opening = {"at": "start"}
+        opening = {"at": "charge"}
         for control, keys in STEP_CONTROLS.items():
             value = _first(start, keys)
             if value is not None:
@@ -299,7 +368,48 @@ def recipe_steps(record: dict) -> list[dict]:
         for key, value in start.items():
             if not isinstance(value, (list, dict)):
                 opening.setdefault(key, value)
-        steps.insert(0, opening)
+        steps.append(opening)
+
+    def read(block, label: str = "") -> None:
+        events = block if isinstance(block, list) else [block]
+        merged: dict = {}
+        for event in events:
+            if isinstance(event, list):                   # a step of conditions
+                read(event, label)
+                return
+            if not isinstance(event, dict):
+                continue
+            if "trigger" in event:
+                merged.update(_decode_event(event))
+            else:                                         # the plainer shape
+                plain = {}
+                when = _first(event, STEP_TIME)
+                temperature = _first(event, STEP_TEMPERATURE)
+                if when is not None:
+                    plain["at"] = when
+                if temperature is not None:
+                    plain["temperature"] = temperature
+                for control, keys in STEP_CONTROLS.items():
+                    value = _first(event, keys)
+                    if value is not None:
+                        plain[control] = value
+                for key, value in event.items():
+                    if not isinstance(value, (list, dict)) and key not in plain:
+                        plain.setdefault(key, value)
+                if plain:
+                    steps.append(plain)
+        if merged:
+            if label:
+                merged["at"] = label
+            steps.append(merged)
+
+    for block in (record.get("events") or record.get("steps")
+                  or record.get("actions") or []):
+        read(block)
+
+    ending = record.get("endSettings")
+    if ending:
+        read(ending, "drop")
     return steps
 
 
@@ -336,12 +446,17 @@ def coffee_lookup(tables: dict) -> dict:
         if behind:
             found.setdefault(behind, ("container", record))
 
-    # A bean answers to its uid and its guid alike; a roast may quote either.
+    # A bean answers to its uid and its guid alike; a roast may quote either —
+    # but an id that more than one record carries identifies none of them.
+    shared: dict[str, list] = {}
     for ref_id, (kind, record) in list(found.items()):
         for key in ID_KEYS:
             value = record.get(key)
-            if not _blank(value):
-                found.setdefault(str(value).strip(), (kind, record))
+            if not _blank(value) and str(value).strip() not in found:
+                shared.setdefault(str(value).strip(), []).append((kind, record))
+    for value, holders in shared.items():
+        if len(holders) == 1:
+            found[value] = holders[0]
     return found
 
 
@@ -384,13 +499,19 @@ def id_index(records: dict) -> dict:
     which is exactly how a recipe whose file was sitting in the library came to
     show as "no recipe" on the roast that ran it.
     """
-    found = {}
+    seen: dict[str, set] = {}
     for ref_id, record in (records or {}).items():
-        found.setdefault(str(ref_id), ref_id)
+        seen.setdefault(str(ref_id), set()).add(ref_id)
         for key in ID_KEYS:
             value = record.get(key)
             if not _blank(value):
-                found.setdefault(str(value).strip(), ref_id)
+                seen.setdefault(str(value).strip(), set()).add(ref_id)
+
+    # An id that several records share — RoasTime writes the machine's guid onto
+    # every recipe made on it — names none of them. Drop it rather than pick one.
+    found = {value: next(iter(ids)) for value, ids in seen.items() if len(ids) == 1}
+    for ref_id in (records or {}):
+        found[str(ref_id)] = ref_id
     return found
 
 
@@ -451,6 +572,46 @@ def _recipe_for(roast_row: dict, recipes: dict, backwards: dict,
     return None, ""
 
 
+def labels_for(lookup: dict, beans: dict | None = None) -> dict:
+    """A name for every id in a coffee lookup, counting each *coffee* once.
+
+    Two things make one coffee look like several here. A record is filed under
+    every id it answers to, so a bean with a uid and a guid appears twice; and a
+    bag in `containers/` carries the same name as the bean in it. :func:`bean_labels`
+    would see the repeats as different coffees of the same name and pull them
+    apart with a piece of each id — "Costa Rica La Minita Tarrazu RFA · 0640",
+    for a bean that never had a twin.
+
+    So resolve each id to the coffee behind it — a container to its bean — name
+    the coffees, and give each id the name of the one it leads to. What survives
+    is real: three beans genuinely called "Colombia Ca" still separate.
+    """
+    beans = beans or {}
+    anchors: dict[str, dict] = {}
+    for ref_id, (kind, record) in lookup.items():
+        anchor = record
+        if kind == "container":
+            behind = _first(record, ("beanId", "beanUid", "bean_id"))
+            if behind:
+                found = beans.get(behind)
+                if found is None and behind in lookup and lookup[behind][0] == "bean":
+                    found = lookup[behind][1]
+                if found is not None:
+                    anchor = found
+        anchors[ref_id] = anchor
+
+    canonical: dict[int, str] = {}
+    once: dict[str, dict] = {}
+    for ref_id, anchor in anchors.items():
+        if id(anchor) not in canonical:
+            canonical[id(anchor)] = ref_id
+            once[ref_id] = anchor
+
+    named = bean_labels(once)
+    return {ref_id: named.get(canonical[id(anchor)], ref_id)
+            for ref_id, anchor in anchors.items()}
+
+
 def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None,
                 lookup: dict | None = None, recipe_links: tuple | None = None) -> dict:
     found: dict = {}
@@ -462,6 +623,11 @@ def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None,
         found["bean_id"] = bean_id
         found["bean_name"] = (labels or {}).get(bean_id) or _first(record, NAME_KEYS)
         found["bean_from"] = kind
+        # The bag is what the roaster reaches for; the bean is what is compared.
+        # Two bags of one coffee must not become two coffees, so the *bean* names
+        # the roast and the lot is kept beside it rather than instead of it.
+        if kind == "container":
+            found["lot_name"] = _first(record, NAME_KEYS) or bean_id
 
         # A container names the lot; the bean behind it carries origin and
         # process, so follow the link when there is one.
@@ -523,7 +689,7 @@ def enrich_many(roast_rows, path: str | None = None) -> list[dict]:
         return []
     loaded = tables(path)
     lookup = coffee_lookup(loaded)
-    labels = bean_labels({ref_id: record for ref_id, (_kind, record) in lookup.items()})
+    labels = labels_for(lookup, loaded.get("bean"))
     recipes = loaded.get("recipe") or {}
     links = (back_links(recipes), name_index(recipes), id_index(recipes))
     return [_enrich_one(row, loaded, labels, lookup, links) for row in rows]
@@ -620,7 +786,7 @@ def enrich(roast_row: dict, path: str | None = None) -> dict:
     """
     loaded = tables(path)
     lookup = coffee_lookup(loaded)
-    labels = bean_labels({ref_id: record for ref_id, (_kind, record) in lookup.items()})
+    labels = labels_for(lookup, loaded.get("bean"))
     return _enrich_one(roast_row, loaded, labels, lookup)
 
 
