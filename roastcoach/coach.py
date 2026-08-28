@@ -221,8 +221,15 @@ def control_moves(row, context, control: str, phase: str, steps: float,
     moves = context.get("moves")
     at, _said = moment_of(row, phase)
     settings = recipe.settings_at(moves, at) if moves is not None else {}
+
+    # The temperature at that moment comes from the curve, not from the nearest
+    # control change — a recipe written in temperature has to name the right one.
+    curve = context.get("curve")
+    if curve is not None and not getattr(curve, "empty", True):
+        settings["bt"], settings["ibts"] = recipe.temperatures_at(curve, at)
     current = settings.get(control, _value(row, f"{control}{phase.capitalize()}"))
-    change = recipe.move(control, at, current, steps, why)
+    change = recipe.move(control, at, current, steps, why,
+                         bean_temp=settings.get("bt"), drum_temp=settings.get("ibts"))
     if change:
         return [change]
 
@@ -233,7 +240,8 @@ def control_moves(row, context, control: str, phase: str, steps: float,
         other = recipe.move(
             "fan", at, settings.get("fan"), -1 if steps > 0 else 1,
             f"{why} — power is already at {float(current):.0f}, so this has to come from "
-            "airflow instead")
+            "airflow instead",
+            bean_temp=settings.get("bt"), drum_temp=settings.get("ibts"))
         if other:
             return [other]
     return []
@@ -603,16 +611,18 @@ def build_context(roasts: pd.DataFrame, row, path: str | None = None) -> dict:
 
     # The roast's own control moves, so advice can say "power 8 → 7 at 4:12"
     # instead of naming a phase average nobody ever set.
-    moves = None
+    moves = curve = None
     try:
         from . import recipe, store
 
-        moves = recipe.timeline(store.load_curve(row.get("uid"), path), row)
+        curve = store.load_curve(row.get("uid"), path)
+        moves = recipe.timeline(curve, row)
     except Exception:
-        moves = None
+        moves = curve = None
 
     return {"targets": TARGETS, "reference": reference, "coffee": coffee,
-            "history": same, "baseline": baseline, "moves": moves, "path": path}
+            "history": same, "baseline": baseline, "moves": moves, "curve": curve,
+            "path": path}
 
 
 def review(roasts: pd.DataFrame, roast_id: str, path: str | None = None) -> list[dict]:

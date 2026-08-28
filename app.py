@@ -45,7 +45,7 @@ def load(token) -> pd.DataFrame:
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
 NEEDS = (("roastcoach/store.py", store, 7),
-         ("roastcoach/library.py", library, 5),
+         ("roastcoach/library.py", library, 6),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
@@ -203,10 +203,20 @@ def sort_out(files: list[dict]) -> tuple[list[dict], dict]:
                                          "beanDerivative", "Timeline")):
             roast_files.append(item)
             continue
+
+        placed = False
         for kind, hints in COMPANION_HINTS.items():
             if any(hint in head for hint in hints):
                 companions.setdefault(kind, []).append(item)
+                placed = True
                 break
+
+        # Everything else RoasTime writes — sync state, config, container groups,
+        # whatever a future version adds — is kept rather than dropped. Storing a
+        # record nobody reads yet costs nothing; throwing it away is how 42 bean
+        # files went missing.
+        if not placed and head.lstrip()[:1] in ("{", "["):
+            companions.setdefault("other", []).append(item)
     return roast_files, companions
 
 
@@ -299,20 +309,31 @@ def sidebar_sync():
     if last:
         st.caption(str(last)[:16].replace("T", " "))
 
-    if st.button("Update roasts", use_container_width=True, type="primary",
-                 help="Read the database again. Roasts written by the Mac sync — or by "
-                      "anybody else signed in — appear here."):
-        refresh()
+    if st.button("Update", use_container_width=True, type="primary",
+                 help="Read the database again and put right anything that has fallen "
+                      "behind: roasts written by the Mac sync or by anybody else signed "
+                      "in, measurements from an older version, the links to beans and "
+                      "recipes, and the coach's own learning."):
+        with st.spinner("Updating…"):
+            done = bring_up_to_date()
         fresh = signature()
         now = int(fresh[0]) if fresh and fresh[0] else 0
         arrived = now - (previous if previous is not None else count)
-        st.toast(f"{arrived} new roast(s)." if arrived > 0 else "Nothing new yet.")
+
+        said = []
+        if arrived > 0:
+            said.append(f"{arrived} new roast(s)")
+        if done["remeasured"]:
+            said.append(f"{done['remeasured']} re-measured")
+        if done["graded"]:
+            said.append(f"{done['graded']} suggestion(s) graded")
+        st.toast(" · ".join(said) if said else "Everything was already up to date.")
         st.rerun()
 
     behind = optional(store, "outdated", default=0) or 0
     if behind:
-        st.caption(f":orange[{behind} roast(s) measured by an older version — the **Data** "
-                   "page can re-measure them.]")
+        st.caption(f":orange[{behind} roast(s) were measured by an older version. "
+                   "**Update** puts them right.]")
 
     # Nothing for a day and a half, from any direction, means the Mac sync has
     # stopped rather than that nobody has roasted.
@@ -344,6 +365,49 @@ def account_strip(user: str):
         if st.button("Sign out", use_container_width=True):
             auth.sign_out()
             st.rerun()
+
+
+def caution(message: str, fix_label: str = "", fix=None, key: str = "",
+            icon: str = ":material/warning:", steps: str = ""):
+    """A warning that comes with the button that settles it.
+
+    A warning with nothing to press is a chore handed to the reader. Where the
+    app can put something right itself, the button does it; where it cannot —
+    because the fix is on somebody's Mac — the button shows the exact steps
+    rather than pretending.
+    """
+    st.warning(message, icon=icon)
+    if fix_label and fix is not None:
+        if st.button(fix_label, key=f"fix_{key}", type="primary"):
+            fix()
+    elif fix_label and steps:
+        with st.expander(fix_label):
+            st.markdown(steps)
+
+
+def bring_up_to_date(relearn: bool = True) -> dict:
+    """Everything the app itself can put right, in one pass.
+
+    Re-reads what is stored, re-measures roasts left behind by an older version,
+    joins them to their beans and recipes again, re-learns the effect sizes and
+    grades any advice a later roast has since tested. This is what the sidebar
+    button runs, and what every "fix it" button on a data warning calls into.
+    """
+    done = {"remeasured": 0, "graded": 0, "roasts": 0}
+
+    behind = optional(store, "outdated", default=0) or 0
+    if behind:
+        done["remeasured"] = optional(store, "remeasure", default=0) or 0
+
+    refresh()
+    frame = roasts()
+    done["roasts"] = len(frame)
+    if relearn and not frame.empty:
+        learning.relearn(frame)
+        result = coach.auto_evaluate(frame)
+        done["graded"] = result.get("evaluated", 0)
+    refresh()
+    return done
 
 
 def empty_state(message: str):
@@ -727,6 +791,43 @@ def moves_for(roast_id: str, token):
     return recipe.timeline(store.load_curve(roast_id), None)
 
 
+def recipe_as_written(row):
+    """The recipe RoasTime holds, beside the roast that was actually run.
+
+    A recipe is a plan written against temperature; the roast is what happened.
+    Showing them together is the only way to see whether the plan was followed.
+    """
+    name = text_of(row.get("recipe_name"))
+    ref_id = optional(library, "link_id", dict(row), "recipe")
+    if not (name or ref_id):
+        return
+
+    record = optional(library, "record", "recipe", ref_id) if ref_id else None
+    with st.expander(f"The recipe as written: **{name or ref_id}**",
+                     expanded=False):
+        if not record:
+            st.caption("This roast names a recipe, but that recipe file has not been "
+                       "imported. The **Data** page says how to bring it in.")
+            return
+
+        summary = optional(library, "recipe_summary", record, default={}) or {}
+        if summary:
+            st.dataframe(pd.DataFrame([summary]), width="stretch", hide_index=True)
+
+        steps = optional(library, "recipe_steps", record, default=[]) or []
+        if steps:
+            st.markdown("**Its steps** — as RoasTime stored them")
+            st.dataframe(pd.DataFrame(steps), width="stretch", hide_index=True)
+            st.caption("A Bullet recipe is written against temperature; the table above "
+                       "this one is what the roast actually did, in both temperature and "
+                       "time, so the two can be read against each other.")
+        else:
+            st.caption("That recipe carries no steps — only its name and settings.")
+
+        with st.expander("Everything else in the recipe"):
+            st.json(record, expanded=False)
+
+
 def recipe_panel(row):
     """Every setting and the minute it was made — the roast as a list of moves.
 
@@ -984,6 +1085,7 @@ def roast_detail(row, frame):
 
         st.markdown("#### The recipe you actually ran")
         recipe_panel(row)
+        recipe_as_written(row)
 
         st.markdown("#### What this roast did")
         findings_panel(row, frame)
@@ -1188,21 +1290,23 @@ def page_data():
         except Exception:
             hours = None
         if hours is not None and hours > 36:
-            st.warning(
+            caution(
                 f"**Nothing new has arrived for {hours / 24:.0f} day(s).** If you have "
-                "roasted since then, the Mac sync is not running. On that Mac:",
-                icon=":material/sync_problem:")
-            st.code("tail -20 ~/Library/Logs/roast-coach-sync.log   # what it did last\n"
+                "roasted since then, the Mac sync is not running.",
+                "What to run on that Mac", key="quiet", icon=":material/sync_problem:",
+                steps=(
+                    "```bash\n"
+                    "tail -20 ~/Library/Logs/roast-coach-sync.log   # what it did last\n"
                     "launchctl list | grep roastcoach               # is it scheduled\n"
-                    "python3 mac/sync_to_database.py                # run it now, and watch",
-                    language="bash")
-            st.caption("The last line prints how many roasts it sent and which database it "
-                       "sent them to — if that database is not the one named below, that is "
-                       "the whole problem.")
+                    "python3 mac/sync_to_database.py                # run it now, and watch\n"
+                    "```\n\n"
+                    "The last line prints how many roasts it sent **and which database it "
+                    "sent them to**. If that is not the database named below, that is the "
+                    "whole problem. Then press **Update** in the sidebar."))
 
     if info["roasts"] and len(frame) != info["roasts"]:
-        st.warning(f"{info['roasts']} roasts are stored but only {len(frame)} could be "
-                   "read. Press **Re-read**; if the numbers still differ, that is a bug.")
+        caution(f"{info['roasts']} roasts are stored but only {len(frame)} could be read.",
+                "Read them again", lambda: (refresh(), st.rerun()), key="mismatch")
 
     from roastcoach.uploader import add_roasts_button, folder_watcher
 
@@ -1412,12 +1516,7 @@ def page_data():
     # old answer until they are measured again — so say so, and offer to do it.
     behind = optional(store, "outdated", default=0) or 0
     if behind:
-        st.info(
-            f"**{behind} roast(s) were measured by an earlier version of the app.** "
-            "Their phase percentages — and any pattern warnings that came from them — "
-            "are the old calculation. Nothing needs re-importing: the curves are already "
-            "here, so they can simply be measured again.", icon=":material/calculate:")
-        if st.button("Bring them up to date", type="primary"):
+        def measure_again():
             bar = st.progress(0.0, text="Measuring…")
             done = optional(
                 store, "remeasure", default=0,
@@ -1429,6 +1528,14 @@ def page_data():
             st.session_state["_import_done"] = True
             st.session_state["_import_message"] = f"Measured {done} roast(s) again."
             st.rerun()
+
+        caution(
+            f"**{behind} roast(s) were measured by an earlier version of the app.** "
+            "Their phase percentages — and any pattern warnings that came from them — "
+            "are the old calculation. Nothing needs re-importing: the curves are already "
+            "here, so they can simply be measured again.",
+            "Bring them up to date", measure_again, key="remeasure",
+            icon=":material/calculate:")
 
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a
@@ -1447,13 +1554,21 @@ def page_data():
                  if item["file not here"] or (item["files imported"] == 0
                                               and item["no id on the roast"] < len(rows))]
         if short:
-            st.warning(
+            caution(
                 "**" + ", ".join(f"{item['folder']}" for item in short)
                 + "** — these folders have not been imported, so the roasts that point at "
                   "them show no "
                 + ", ".join(item["what"].lower() for item in short)
                 + ". They live *beside* the roasts folder, not inside it:",
-                icon=":material/folder_off:")
+                "How to fix this", key="folders", icon=":material/folder_off:",
+                steps=(
+                    "**Either** drag the whole `roast-time` folder onto the box above — "
+                    "not `roasts`. Every file in it is sorted into roasts, beans, "
+                    "recipes, containers and profiles by itself.\n\n"
+                    "**Or** run the Mac sync, which sends every sibling folder each "
+                    "time:\n\n"
+                    "```bash\npython3 mac/sync_to_database.py\n```\n\n"
+                    "Then press **Update** in the sidebar."))
             st.code("~/Library/Application Support/roast-time/\n"
                     "├── roasts/     ← what you imported\n"
                     "├── beans/      ← the coffee\n"
@@ -1513,12 +1628,7 @@ def page_data():
     # old answer until they are measured again — so say so, and offer to do it.
     behind = optional(store, "outdated", default=0) or 0
     if behind:
-        st.info(
-            f"**{behind} roast(s) were measured by an earlier version of the app.** "
-            "Their phase percentages — and any pattern warnings that came from them — "
-            "are the old calculation. Nothing needs re-importing: the curves are already "
-            "here, so they can simply be measured again.", icon=":material/calculate:")
-        if st.button("Bring them up to date", type="primary"):
+        def measure_again():
             bar = st.progress(0.0, text="Measuring…")
             done = optional(
                 store, "remeasure", default=0,
@@ -1530,6 +1640,14 @@ def page_data():
             st.session_state["_import_done"] = True
             st.session_state["_import_message"] = f"Measured {done} roast(s) again."
             st.rerun()
+
+        caution(
+            f"**{behind} roast(s) were measured by an earlier version of the app.** "
+            "Their phase percentages — and any pattern warnings that came from them — "
+            "are the old calculation. Nothing needs re-importing: the curves are already "
+            "here, so they can simply be measured again.",
+            "Bring them up to date", measure_again, key="remeasure",
+            icon=":material/calculate:")
 
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a
@@ -1953,25 +2071,41 @@ def page_method():
 
 # ---------------------------------------------------------------------------
 
-st.logo(str(ASSETS / "logo-full.svg"), icon_image=str(ASSETS / "icon-64.png"))
 
-# Nothing below this line renders for anyone who has not signed in.
-user = auth.require(logo=_mark())
-account_strip(user)
+def main():
+    """Draw the app. Streamlit runs this file as ``__main__``; nothing else does.
 
-pages = [
-    st.Page(page_coach, title="Coach", icon=":material/insights:"),
-    st.Page(page_roasts, title="Roasts", icon=":material/local_fire_department:"),
-    st.Page(page_after, title="After the roast", icon=":material/edit_note:"),
-    st.Page(page_compare, title="Compare", icon=":material/analytics:"),
-    st.Page(page_learning, title="Learning", icon=":material/school:"),
-    st.Page(page_data, title="Data", icon=":material/folder:"),
-    st.Page(page_method, title="Method", icon=":material/balance:"),
-]
+    Everything above is definitions, so this file can be imported — by the tests,
+    or by anything else that wants one of these functions — without a page being
+    drawn. That is not only tidiness: drawing a page outside a Streamlit session
+    quietly damages Streamlit itself, because with no session there is no cursor
+    to hang a block on, so ``st.form`` stamps its form id onto the *root* element
+    and never takes it off. Every widget drawn afterwards in that process then
+    believes it is inside a form. An import should not be able to do that.
+    """
+    st.logo(str(ASSETS / "logo-full.svg"), icon_image=str(ASSETS / "icon-64.png"))
 
-# The test suite opens one page at a time; the browser always gets all five.
-only = os.environ.get("ROAST_COACH_PAGE")
-if only:
-    pages = [page for page in pages if page.title == only] or pages
+    # Nothing below this line renders for anyone who has not signed in.
+    user = auth.require(logo=_mark())
+    account_strip(user)
 
-st.navigation(pages).run()
+    pages = [
+        st.Page(page_coach, title="Coach", icon=":material/insights:"),
+        st.Page(page_roasts, title="Roasts", icon=":material/local_fire_department:"),
+        st.Page(page_after, title="After the roast", icon=":material/edit_note:"),
+        st.Page(page_compare, title="Compare", icon=":material/analytics:"),
+        st.Page(page_learning, title="Learning", icon=":material/school:"),
+        st.Page(page_data, title="Data", icon=":material/folder:"),
+        st.Page(page_method, title="Method", icon=":material/balance:"),
+    ]
+
+    # The test suite opens one page at a time; the browser always gets all seven.
+    only = os.environ.get("ROAST_COACH_PAGE")
+    if only:
+        pages = [page for page in pages if page.title == only] or pages
+
+    st.navigation(pages).run()
+
+
+if __name__ == "__main__":
+    main()

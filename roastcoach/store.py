@@ -77,7 +77,9 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #   3  outdated() / remeasure(), the bean as the coffee's identity
 #   4  colour and defect fields, and the cupping verdicts in `sensory`
 #   5  the four colour scales, and advice stored as control moves
-VERSION = 5
+#   6  roast_name, bean and recipe_name kept apart as three columns
+#   7  field_report(): what RoasTime wrote, against what the app reads
+VERSION = 7
 
 
 def _now() -> str:
@@ -499,6 +501,31 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
         bean_id.notna(), "bean file",
         np.where(typed.notna(), "typed", "roast name"))
 
+    # Three different things, kept apart on purpose:
+    #
+    #   roast_name   what RoasTime called this roast — what you typed at the
+    #                machine that afternoon, batch number and all
+    #   bean         the bean file RoasTime linked to it, which is the identity
+    #                roasts are compared under
+    #   recipe_name  the profile it was roasted from
+    #
+    # They were being collapsed into one "coffee", which meant a table could not
+    # tell you that two roasts of one bean ran from different recipes.
+    roasts["roast_name"] = (roasts.get("roastName", pd.Series("", index=roasts.index))
+                            .fillna("").astype(str).str.strip())
+
+    # The machine is the serial number on the roast — RoasTime has no machine
+    # file to link to, and its `containers` are bags of coffee, not roasters.
+    if "machine_name" not in roasts:
+        serial = roasts.get("serialNumber", pd.Series(np.nan, index=roasts.index))
+        roasts["machine_name"] = serial.map(
+            lambda value: "" if pd.isna(value) or not str(value).strip()
+            else f"Bullet {str(value).strip()}")
+    roasts["bean"] = named.fillna("")
+    if "recipe_name" not in roasts:
+        roasts["recipe_name"] = ""
+    roasts["recipe_name"] = roasts["recipe_name"].fillna("")
+
     roasts["label"] = [roast_label(row) for _, row in roasts.iterrows()]
 
     # The weights the roaster typed win over whatever RoasTime recorded — the
@@ -515,6 +542,92 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
             (1 - roasts["weightRoasted"] / roasts["greenWeight"]) * 100, np.nan)
 
     return roasts
+
+
+# ---------------------------------------------------------------------------
+# What RoasTime gives us, and what the app does with it
+# ---------------------------------------------------------------------------
+
+# Where each field ends up. Anything not named here is stored and searchable but
+# not yet shown anywhere — which is exactly what "a lot of what RoasTime knows is
+# not mapping across" needs to be answerable with, field by field.
+FIELD_USE = {
+    "roastName": "Roast name, in every table",
+    "dateTime": "The roast's date and time",
+    "beanId": "Links the roast to its bean file",
+    "recipeId": "Links the roast to its recipe",
+    "officialRecipeId": "Links to an Aillio recipe",
+    "containerId": "Links to the machine",
+    "userProfileId": "Who roasted it",
+    "roastNumber": "Batch number",
+    "weightGreen": "Green weight, and weight loss",
+    "weightRoasted": "Roasted weight, and weight loss",
+    "preheatTemperature": "Readout: preheat",
+    "drumChargeTemperature": "Readout: charge · the turning-point advice",
+    "drumDropTemperature": "Readout: end temperature · trends · comparisons",
+    "beanChargeTemperature": "Readout",
+    "beanDropTemperature": "Readout: bean at drop",
+    "indexYellowingStart": "Yellowing — phases, shares, the recipe timeline",
+    "indexFirstCrackStart": "First crack — phases, crash baseline, development",
+    "indexFirstCrackEnd": "First crack end",
+    "indexSecondCrackStart": "Second crack",
+    "roastEndIndex": "Drop — total time and every share",
+    "totalRoastTime": "Total time when the index is missing",
+    "sampleRate": "Turns sample numbers into minutes",
+    "beanTemperature": "The bean curve, and every measure from it",
+    "drumTemperature": "The IBTS curve, rate of rise, crash and flick",
+    "beanDerivative": "Bean rate of rise",
+    "actions": "Power, fan and drum — the recipe you ran",
+    "ambient": "Readout: ambient",
+    "humidity": "Readout: humidity",
+    "rating": "Your rating",
+    "serialNumber": "Machine identity",
+    "firmware": "Machine firmware",
+    "hardware": "Machine hardware",
+}
+
+
+def field_report(limit: int = 300, path: str | None = None) -> pd.DataFrame:
+    """Every field present in your stored roasts, and where the app uses it.
+
+    Reads a sample of roasts, gathers every key RoasTime actually wrote, and says
+    for each one how many roasts carry it and what the app does with it. Fields
+    with no use listed are kept — nothing is thrown away — but nothing reads them
+    yet, which makes this the list to argue with.
+    """
+    rows = db.rows(f"SELECT data FROM roasts ORDER BY date DESC LIMIT {int(limit)}",
+                   override=path)
+    if not rows:
+        return pd.DataFrame(columns=["field", "roasts with it", "example", "used for"])
+
+    seen: dict[str, int] = {}
+    example: dict[str, str] = {}
+    for (data,) in rows:
+        try:
+            record = json.loads(data)
+        except Exception:
+            continue
+        for key, value in record.items():
+            seen[key] = seen.get(key, 0) + 1
+            if key not in example and value not in (None, "", [], {}):
+                text = str(value)
+                example[key] = (f"{len(value)} samples" if isinstance(value, list)
+                                else (text[:40] + "…" if len(text) > 40 else text))
+
+    # Everything the app computes from the curve is a measure, not a RoasTime
+    # field; naming them here keeps the list about what RoasTime gave us.
+    from .metrics import METRIC_COLUMNS
+
+    computed = set(METRIC_COLUMNS)
+    frame = pd.DataFrame([
+        {"field": key,
+         "roasts with it": count,
+         "example": example.get(key, ""),
+         "used for": (FIELD_USE.get(key)
+                      or ("measured by Roast Coach" if key in computed else ""))}
+        for key, count in sorted(seen.items(), key=lambda pair: (-pair[1], pair[0]))
+    ])
+    return frame
 
 
 # ---------------------------------------------------------------------------

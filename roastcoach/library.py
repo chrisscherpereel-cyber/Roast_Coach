@@ -74,8 +74,10 @@ BEAN_FIELDS = {
 
 # What this file can do — see the note in store.py. 2 adds enrich_many(),
 # tables(), bean_labels() and link_report(); 3 stops treating a pandas NaN as a
-# bean id called "nan".
-VERSION = 3
+# bean id called "nan"; 4 reports coverage for every companion kind, not just
+# beans; 5 resolves a roast's bean id against containers as well as beans;
+# 6 reads a recipe's own steps and fields, not only its name.
+VERSION = 6
 
 
 def _now() -> str:
@@ -190,8 +192,9 @@ def link_id(roast: dict, kind: str) -> str | None:
     return _first(roast, LINKS.get(kind, ()))
 
 
-OTHER_KINDS = (("recipe", "recipe_name"), ("container", "machine_name"),
-               ("userProfile", "roasted_by"))
+# RoasTime's `containers` are bags of coffee, not machines — the machine is
+# identified by the serial number on the roast itself, which store.py reads.
+OTHER_KINDS = (("recipe", "recipe_name"), ("userProfile", "roasted_by"))
 
 
 def bean_labels(beans: dict) -> dict:
@@ -221,15 +224,129 @@ def bean_labels(beans: dict) -> dict:
     return names
 
 
-def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None) -> dict:
+# What a recipe holds beyond its name. RoasTime writes these on every recipe and
+# official recipe; anything not listed here is still stored and still shown.
+RECIPE_FIELDS = {
+    "roast degree": ("roastDegree", "roast_degree"),
+    "target weight": ("weight", "targetWeight"),
+    "preheat": ("preheatTemp", "preheatTemperature"),
+    "country": ("country",),
+    "process": ("process",),
+    "temperature scale": ("tempMeasurement",),
+    "device": ("deviceType", "deviceId"),
+    "from roast": ("referenceRoastGuid", "referenceRoastUid"),
+    "downloads": ("downloadCount",),
+    "updated": ("updatedAt",),
+}
+
+# What a step inside a recipe might be called, whichever way this version writes
+# it. A Bullet recipe is a list of moves against temperature or time.
+STEP_TIME = ("time", "seconds", "at", "index", "elapsed", "timestamp")
+STEP_TEMPERATURE = ("temp", "temperature", "beanTemperature", "bt", "value",
+                    "targetTemp", "triggerTemp")
+STEP_CONTROLS = {"power": ("power", "p", "heat", "burner"),
+                 "fan": ("fan", "f", "airflow"),
+                 "drum": ("drum", "d", "drumSpeed", "rpm")}
+
+
+def recipe_steps(record: dict) -> list[dict]:
+    """A recipe's own steps, in whatever shape this RoasTime version wrote them.
+
+    Bullet recipes are written against *temperature* — "power 7 at 165 °C" — and
+    sometimes against time as well, so both are carried through when they are
+    there. Unknown keys are kept rather than guessed at: a step nobody
+    understands is still worth showing.
+    """
+    steps = []
+    events = record.get("events") or record.get("steps") or record.get("actions") or []
+    if isinstance(events, dict):
+        events = list(events.values())
+
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        step = {}
+        when = _first(event, STEP_TIME)
+        temperature = _first(event, STEP_TEMPERATURE)
+        if when is not None:
+            step["at"] = when
+        if temperature is not None:
+            step["temperature"] = temperature
+        for control, keys in STEP_CONTROLS.items():
+            value = _first(event, keys)
+            if value is not None:
+                step[control] = value
+        # Anything this app has no name for, kept as it was written.
+        extra = {key: value for key, value in event.items()
+                 if not isinstance(value, (list, dict))
+                 and key not in STEP_TIME + STEP_TEMPERATURE
+                 and not any(key in keys for keys in STEP_CONTROLS.values())}
+        for key, value in list(extra.items())[:4]:
+            step.setdefault(key, value)
+        if step:
+            steps.append(step)
+
+    start = record.get("startSettings")
+    if isinstance(start, dict) and start:
+        opening = {"at": "start"}
+        for control, keys in STEP_CONTROLS.items():
+            value = _first(start, keys)
+            if value is not None:
+                opening[control] = value
+        for key, value in start.items():
+            if not isinstance(value, (list, dict)):
+                opening.setdefault(key, value)
+        steps.insert(0, opening)
+    return steps
+
+
+def recipe_summary(record: dict) -> dict:
+    """The named fields of a recipe, for a table beside its steps."""
+    found = {}
+    for label, keys in RECIPE_FIELDS.items():
+        value = _first(record, keys)
+        if value is not None:
+            found[label] = value
+    return found
+
+
+def coffee_lookup(tables: dict) -> dict:
+    """Everything a roast's bean id might point at: a bean, or a container of one.
+
+    RoasTime keeps *containers* — a bag or lot of a coffee, named the way the
+    roaster thinks of it ("Del Campo") — as well as *beans*, which carry the
+    origin and process. A roast's `beanId` can be either, and looking only in
+    `beans/` is why 510 roasts reported a bean whose file "had not arrived" while
+    the file was sitting in `containers/` all along.
+    """
+    found = {}
+    for ref_id, record in (tables.get("bean") or {}).items():
+        found[ref_id] = ("bean", record)
+    for ref_id, record in (tables.get("container") or {}).items():
+        found.setdefault(ref_id, ("container", record))
+    return found
+
+
+def _enrich_one(roast_row: dict, tables: dict, labels: dict | None = None,
+                lookup: dict | None = None) -> dict:
     found: dict = {}
 
+    lookup = lookup if lookup is not None else coffee_lookup(tables)
     bean_id = link_id(roast_row, "bean")
-    if bean_id:
-        bean = tables.get("bean", {}).get(bean_id)
+    if bean_id and bean_id in lookup:
+        kind, record = lookup[bean_id]
+        found["bean_id"] = bean_id
+        found["bean_name"] = (labels or {}).get(bean_id) or _first(record, NAME_KEYS)
+        found["bean_from"] = kind
+
+        # A container names the lot; the bean behind it carries origin and
+        # process, so follow the link when there is one.
+        bean = record if kind == "bean" else None
+        if bean is None:
+            behind = _first(record, ("beanId", "beanUid", "bean_id"))
+            bean = (tables.get("bean") or {}).get(behind) if behind else None
+
         if bean:
-            found["bean_id"] = bean_id
-            found["bean_name"] = (labels or {}).get(bean_id) or _first(bean, NAME_KEYS)
             for column, keys in BEAN_FIELDS.items():
                 value = _first(bean, keys)
                 if value is not None:
@@ -270,60 +387,85 @@ def enrich_many(roast_rows, path: str | None = None) -> list[dict]:
     if not rows:
         return []
     loaded = tables(path)
-    labels = bean_labels(loaded.get("bean", {}))
-    return [_enrich_one(row, loaded, labels) for row in rows]
+    lookup = coffee_lookup(loaded)
+    labels = bean_labels({ref_id: record for ref_id, (_kind, record) in lookup.items()})
+    return [_enrich_one(row, loaded, labels, lookup) for row in rows]
 
 
-def link_report(roast_rows, path: str | None = None) -> dict:
-    """How the roasts and the bean files line up — for the Data page.
+def link_report(roast_rows, path: str | None = None, kind: str = "bean") -> dict:
+    """How the roasts and one kind of companion file line up — for the Data page.
 
-    A roast grouped under the wrong heading is nearly always one of three things,
-    and this says which: it carries no bean id at all, it points at a bean whose
-    file has not been synced, or it matched.
+    A roast missing its bean, its recipe or its machine is nearly always one of
+    three things, and this says which: it carries no id at all, it points at a
+    file that has not been synced, or it matched.
     """
+    loaded = tables(path)
     rows = list(roast_rows)
-    beans = tables(path).get("bean", {})
-    report = {"roasts": len(rows), "matched": 0, "no_id": 0,
-              "missing": {}, "beans": len(beans)}
+    known = coffee_lookup(loaded) if kind == "bean" else loaded.get(kind, {})
+    report = {"kind": kind, "roasts": len(rows), "matched": 0, "no_id": 0,
+              "missing": {}, "stored": len(known)}
     for row in rows:
-        bean_id = link_id(row, "bean")
-        if not bean_id:
+        ref_id = link_id(row, kind)
+        if not ref_id:
             report["no_id"] += 1
-        elif bean_id in beans:
+        elif ref_id in known:
             report["matched"] += 1
         else:
-            report["missing"][bean_id] = report["missing"].get(bean_id, 0) + 1
+            report["missing"][ref_id] = report["missing"].get(ref_id, 0) + 1
+    report["beans"] = report["stored"]          # kept for older callers
     return report
+
+
+# What each kind is called on screen, and which RoasTime folder carries it.
+COMPANIONS = (("bean", "Bean or lot", "beans + containers"),
+              ("recipe", "Recipe", "recipes + officialRecipes"),
+              ("userProfile", "Roasted by", "userProfiles"))
+
+
+def coverage(roast_rows, path: str | None = None) -> list[dict]:
+    """One row per companion kind: matched, missing its file, or never recorded.
+
+    "A lot of what RoasTime knows is not showing up" is nearly always one folder
+    that never arrived. This says which, by name, with the count.
+    """
+    rows = list(roast_rows)
+    loaded = tables(path)
+    coffees = coffee_lookup(loaded)
+    found = []
+    for kind, label, folder in COMPANIONS:
+        # A bean id may name a bean or a container of one — both count as found.
+        known = coffees if kind == "bean" else loaded.get(kind, {})
+        matched = no_id = 0
+        missing: dict[str, int] = {}
+        for row in rows:
+            ref_id = link_id(row, kind)
+            if not ref_id:
+                no_id += 1
+            elif ref_id in known:
+                matched += 1
+            else:
+                missing[ref_id] = missing.get(ref_id, 0) + 1
+        found.append({
+            "what": label, "kind": kind, "folder": f"{folder}/",
+            "files imported": len(known),
+            "roasts matched": matched,
+            "file not here": sum(missing.values()),
+            "no id on the roast": no_id,
+            "worst": sorted(missing.items(), key=lambda pair: -pair[1])[:3],
+        })
+    return found
 
 
 def enrich(roast_row: dict, path: str | None = None) -> dict:
     """Everything the reference records add to one roast.
 
-    Returns only what was found, so a setup with no bean or recipe files behaves
-    exactly as before rather than filling the roast with blanks.
+    The same joining as :func:`enrich_many`, for a single roast — one query
+    rather than one per record, and identical results either way.
     """
-    found: dict = {}
-
-    bean_id = link_id(roast_row, "bean")
-    if bean_id:
-        bean = record("bean", bean_id, path)
-        if bean:
-            found["bean_id"] = bean_id
-            found["bean_name"] = _first(bean, NAME_KEYS)
-            for column, keys in BEAN_FIELDS.items():
-                value = _first(bean, keys)
-                if value is not None:
-                    found[column] = value
-
-    for kind, column in OTHER_KINDS:
-        ref_id = link_id(roast_row, kind)
-        if not ref_id:
-            continue
-        stored = record(kind, ref_id, path)
-        if stored:
-            found[column] = _first(stored, NAME_KEYS) or ref_id
-
-    return found
+    loaded = tables(path)
+    lookup = coffee_lookup(loaded)
+    labels = bean_labels({ref_id: record for ref_id, (_kind, record) in lookup.items()})
+    return _enrich_one(roast_row, loaded, labels, lookup)
 
 
 def describe_link(roast_row: dict, path: str | None = None) -> list[str]:

@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-VERSION = 1
+VERSION = 2
 
 CONTROLS = ("power", "fan", "drum")
 
@@ -63,13 +63,29 @@ def _events(row) -> list[dict]:
     return out
 
 
+def _temperature_at(curve: pd.DataFrame, seconds: pd.Series, column: str, at_seconds: float):
+    """The temperature the roast was at, at a given second."""
+    if column not in curve:
+        return np.nan
+    values = pd.to_numeric(curve[column], errors="coerce")
+    position = int((seconds - at_seconds).abs().idxmin()) if len(seconds) else None
+    if position is None or position >= len(values):
+        return np.nan
+    value = values.iloc[position]
+    return float(value) if pd.notna(value) else np.nan
+
+
 def timeline(curve: pd.DataFrame, row=None) -> pd.DataFrame:
-    """Every control change in one roast: when, which control, from what to what.
+    """Every control change in one roast: when, at what temperature, and to what.
 
     Read from the stored per-sample curve rather than from anything the roaster
     typed, so it is what the machine did.
+
+    Both time and temperature, because a Bullet recipe is written in temperature
+    — "power 7 at 165 °C" — while the roast is watched on a clock. Neither one
+    alone lets you follow a roast you did not run yourself.
     """
-    columns = ["at", "clock", "kind", "event", "control", "from", "to", "step"]
+    columns = ["at", "clock", "bt", "ibts", "kind", "event", "control", "from", "to", "step"]
     if curve is None or curve.empty or "seconds" not in curve:
         return pd.DataFrame(columns=columns)
 
@@ -120,26 +136,59 @@ def timeline(curve: pd.DataFrame, row=None) -> pd.DataFrame:
 
     frame = frame.sort_values(["at", "kind"], ascending=[True, False]).reset_index(drop=True)
     frame["clock"] = frame["at"].map(clock)
+
+    # The temperature each move was made at — the way the recipe was written.
+    frame["bt"] = [_temperature_at(curve, seconds, "bean_temp", at * 60.0)
+                   for at in frame["at"]]
+    frame["ibts"] = [_temperature_at(curve, seconds, "ibts_temp", at * 60.0)
+                     for at in frame["at"]]
+
     for column in columns:
         if column not in frame:
             frame[column] = None
     return frame[columns]
 
 
+def temperatures_at(curve: pd.DataFrame, minutes: float) -> tuple:
+    """Bean and drum temperature at a moment, read from the curve itself.
+
+    Not from the nearest control change: a move made at 1:12 is not at the
+    charge temperature, and saying so would send somebody to the wrong place in
+    the roast.
+    """
+    if curve is None or curve.empty or "seconds" not in curve:
+        return (np.nan, np.nan)
+    seconds = pd.to_numeric(curve["seconds"], errors="coerce")
+    at = float(minutes) * 60.0
+    return (_temperature_at(curve, seconds, "bean_temp", at),
+            _temperature_at(curve, seconds, "ibts_temp", at))
+
+
 def settings_at(moves: pd.DataFrame, minutes: float) -> dict:
-    """What each control was set to at a given moment."""
+    """What each control was set to at a given moment, and the temperature there."""
     found = {control: np.nan for control in CONTROLS}
+    found["bt"] = found["ibts"] = np.nan
     if moves is None or moves.empty:
         return found
+
     sets = moves[(moves["kind"] == "set") & (moves["at"] <= minutes + 1e-9)]
     for control in CONTROLS:
         mine = sets[sets["control"] == control]
         if not mine.empty:
             found[control] = float(mine.iloc[-1]["to"])
+
+    # The temperature at that moment, from whichever row of the timeline is
+    # nearest — so advice can be given the way a recipe is written.
+    if "bt" in moves:
+        nearest = (moves["at"] - minutes).abs().idxmin()
+        for column in ("bt", "ibts"):
+            value = moves.loc[nearest, column] if column in moves else np.nan
+            found[column] = float(value) if pd.notna(value) else np.nan
     return found
 
 
-def move(control: str, at_minutes: float, current, steps: float, why: str = "") -> dict | None:
+def move(control: str, at_minutes: float, current, steps: float, why: str = "",
+         bean_temp=None, drum_temp=None) -> dict | None:
     """One change the roaster can actually make: a whole step, on one control, at a time.
 
     Anything under half a step is no change at all and is dropped rather than
@@ -165,10 +214,25 @@ def move(control: str, at_minutes: float, current, steps: float, why: str = "") 
             return None
         whole = int(target - current)
 
+    def _temp(value):
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return None
+        return round(value, 1) if np.isfinite(value) else None
+
     return {"control": control, "at": float(at_minutes), "clock": clock(at_minutes),
+            "bt": _temp(bean_temp), "ibts": _temp(drum_temp),
             "from": current if np.isfinite(current) else None,
             "to": target if np.isfinite(target) else None,
             "step": whole, "why": why}
+
+
+def when(change: dict) -> str:
+    """When to make a change, said both ways: on the clock and at a temperature."""
+    at = change.get("clock", "—")
+    temperature = change.get("bt")
+    return f"{at} · {float(temperature):.0f} °C BT" if temperature is not None else at
 
 
 def describe(change: dict) -> str:
@@ -177,10 +241,10 @@ def describe(change: dict) -> str:
         return ""
     control = change["control"]
     if change.get("to") is not None and change.get("from") is not None:
-        return (f"At {change['clock']}, {control} {change['from']:.0f} → "
+        return (f"At {when(change)}, {control} {change['from']:.0f} → "
                 f"{change['to']:.0f}")
     direction = "up" if change["step"] > 0 else "down"
-    return (f"At {change['clock']}, {control} {direction} "
+    return (f"At {when(change)}, {control} {direction} "
             f"{abs(change['step']):.0f} step{'s' if abs(change['step']) != 1 else ''}")
 
 
@@ -190,12 +254,13 @@ def plan(moves: pd.DataFrame, changes: list[dict]) -> pd.DataFrame:
     Shown as a plan rather than a diff, because that is how it gets used — read
     down the list while the drum is turning. Anything altered says what it was.
     """
-    columns = ["clock", "at", "control", "set to", "last time", "why"]
+    columns = ["clock", "at", "bt", "control", "set to", "last time", "why"]
     rows = []
 
     if moves is not None and not moves.empty:
         for _, item in moves[moves["kind"] == "set"].iterrows():
             rows.append({"clock": item["clock"], "at": float(item["at"]),
+                         "bt": item.get("bt"),
                          "control": item["control"], "set to": item["to"],
                          "last time": item["to"], "why": ""})
 
@@ -211,8 +276,8 @@ def plan(moves: pd.DataFrame, changes: list[dict]) -> pd.DataFrame:
             row["set to"] = change.get("to")
             row["why"] = change.get("why", "")
         else:
-            rows.append({"clock": change["clock"], "at": at, "control": control,
-                         "set to": change.get("to"),
+            rows.append({"clock": change["clock"], "at": at, "bt": change.get("bt"),
+                         "control": control, "set to": change.get("to"),
                          "last time": change.get("from"),
                          "why": change.get("why", "")})
 
