@@ -1,0 +1,330 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    margin: 0; font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: #1f1a17; background: transparent;
+  }
+  @media (prefers-color-scheme: dark) { body { color: #efe9e3; } }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  button {
+    font: inherit; font-weight: 600; padding: 11px 20px; border-radius: 9px; cursor: pointer;
+    border: 1px solid transparent; background: #E8622A; color: #fff; transition: filter .12s;
+  }
+  button:hover { filter: brightness(1.06); }
+  button.quiet {
+    background: transparent; border-color: rgba(128,110,100,.45); color: inherit;
+    font-weight: 500; padding: 9px 15px;
+  }
+  button[disabled] { opacity: .5; cursor: default; filter: none; }
+  .note { opacity: .78; font-size: 13px; margin-top: 10px; }
+  .note b { font-weight: 600; opacity: 1; }
+  .folder {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; font-weight: 600;
+  }
+  .bar {
+    height: 6px; border-radius: 99px; background: rgba(128,110,100,.25);
+    overflow: hidden; margin-top: 10px;
+  }
+  .bar > i { display: block; height: 100%; background: #E8622A; width: 0; transition: width .2s; }
+  .warn { color: #b4471f; }
+  .dot {
+    display: inline-block; width: 7px; height: 7px; border-radius: 99px;
+    background: #2E9E63; margin-right: 7px; vertical-align: 1px;
+  }
+  .dot.idle { background: #C9A227; }
+</style>
+</head>
+<body>
+<div class="row">
+  <button id="connect">Connect roasts folder</button>
+  <button id="check" class="quiet" hidden>Check for new roasts</button>
+  <button id="change" class="quiet" hidden>Change folder</button>
+  <button id="forget" class="quiet" hidden>Disconnect</button>
+</div>
+<div class="bar" hidden id="barwrap"><i id="bar"></i></div>
+<div class="note" id="note"></div>
+
+<script>
+const BATCH = 12;
+const ROAST_HINTS = ["beanTemperature", "drumTemperature", "roastName", "beanDerivative"];
+
+let args = {};
+let handle = null;
+let queue = [];            // entries still to read
+let counts = { fresh: 0, changed: 0, looked: 0 };
+let sequence = 0;
+let working = false;
+let scannedThisLoad = false;
+
+const $ = (id) => document.getElementById(id);
+
+/* --- Streamlit component protocol, without the npm package --- */
+function send(value) {
+  sequence += 1;
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setComponentValue",
+      value: { ...value, seq: sequence } }, "*");
+}
+function height() {
+  window.parent.postMessage(
+    { isStreamlitMessage: true, type: "streamlit:setFrameHeight",
+      height: document.body.scrollHeight + 8 }, "*");
+}
+window.addEventListener("message", (event) => {
+  if (event.data.type !== "streamlit:render") return;
+  args = event.data.args || {};
+  if (queue.length) pump();          // the app is ready for the next batch
+  height();
+});
+window.parent.postMessage(
+  { isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+
+/* --- the folder is remembered between visits, so the path never gets typed --- */
+function idb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open("roast-coach", 1);
+    request.onupgradeneeded = () => request.result.createObjectStore("handles");
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
+  });
+}
+async function remember(value) {
+  try {
+    const db = await idb();
+    await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readwrite");
+      tx.objectStore("handles").put(value, "roasts");
+      tx.oncomplete = resolve;
+    });
+  } catch (error) { /* nothing to do; the picker still remembers by id */ }
+}
+async function recall() {
+  try {
+    const db = await idb();
+    return await new Promise((resolve) => {
+      const tx = db.transaction("handles", "readonly");
+      const request = tx.objectStore("handles").get("roasts");
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => resolve(null);
+    });
+  } catch (error) { return null; }
+}
+
+/* --- what the app already has --- */
+function statusOf(file) {
+  const previous = (args.known || {})[file.name];
+  if (!previous) return "fresh";
+  const sameTime = Math.abs(previous[0] - file.lastModified / 1000) < 1;
+  return sameTime && previous[1] === file.size ? "same" : "changed";
+}
+
+function looksLikeRoast(text) {
+  const head = text.slice(0, 4000);
+  const trimmed = head.replace(/^\s+/, "");
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return ROAST_HINTS.some((hint) => head.includes(hint));
+  }
+  const lower = head.toLowerCase();
+  return lower.includes("timeline") && (lower.includes("ibts") || lower.includes("bean probe"));
+}
+
+/* --- what the roaster sees --- */
+function buttons({ connected, needsClick }) {
+  $("connect").hidden = connected || needsClick;
+  $("check").hidden = !connected;
+  $("change").hidden = !connected;
+  $("forget").hidden = !connected && !needsClick;
+  height();
+}
+
+function say(html, warn) {
+  $("note").innerHTML = warn ? '<span class="warn">' + html + "</span>" : html;
+  height();
+}
+
+function summary(extra) {
+  const parts = [];
+  if (handle) parts.push('<span class="dot"></span>Watching <span class="folder">' +
+                         handle.name + "</span>");
+  if (extra) parts.push(extra);
+  say(parts.join(" · "));
+}
+
+/* --- reading --- */
+async function pump() {
+  if (working || !queue.length) return;
+  working = true;
+  const take = queue.splice(0, BATCH);
+  const files = [];
+  const notRoasts = [];
+
+  $("barwrap").hidden = false;
+  for (let index = 0; index < take.length; index += 1) {
+    const { entry, file, state } = take[index];
+    try {
+      const text = await file.text();
+      if (looksLikeRoast(text)) {
+        files.push({ name: entry.name, text,
+                     modified: file.lastModified / 1000, size: file.size, state });
+      } else {
+        notRoasts.push(entry.name);
+      }
+    } catch (error) {
+      notRoasts.push(entry.name);
+    }
+    const total = counts.fresh + counts.changed;
+    $("bar").style.width =
+      Math.round(((total - queue.length - (take.length - index - 1)) / Math.max(1, total)) * 100)
+      + "%";
+  }
+
+  if (queue.length) {
+    summary(queue.length + " still to read");
+  } else {
+    $("barwrap").hidden = true;
+    summary("up to date");
+  }
+  send({ action: "files", folder: handle.name, files, remaining: queue.length,
+         notRoasts, fresh: counts.fresh, changed: counts.changed, looked: counts.looked });
+  working = false;
+}
+
+async function scan(quiet) {
+  if (!handle || working) return;
+  counts = { fresh: 0, changed: 0, looked: 0 };
+  const found = [];
+  const ignored = {};
+
+  try {
+    if (!quiet) summary("looking…");
+    for await (const entry of handle.values()) {
+      if (entry.kind !== "file" || entry.name.startsWith(".")) continue;
+      const extension = entry.name.includes(".")
+        ? entry.name.split(".").pop().toLowerCase() : "";
+      if (!["", "json", "csv"].includes(extension)) {
+        ignored[extension] = (ignored[extension] || 0) + 1;
+        continue;
+      }
+      counts.looked += 1;
+      const file = await entry.getFile();
+      const state = statusOf(file);
+      if (state === "same") continue;
+      counts[state === "fresh" ? "fresh" : "changed"] += 1;
+      found.push({ entry, file, state });
+    }
+  } catch (error) {
+    say("Could not read that folder: " + (error.message || error), true);
+    send({ action: "error", message: String(error.message || error) });
+    return;
+  }
+
+  if (!found.length) {
+    const others = Object.keys(ignored).map((e) => ignored[e] + " ." + e).join(", ");
+    summary("nothing new in " + counts.looked + " roast file" +
+            (counts.looked === 1 ? "" : "s") +
+            (others ? " (ignored " + others + ")" : ""));
+    $("barwrap").hidden = true;
+    send({ action: "scanned", folder: handle.name, looked: counts.looked });
+    return;
+  }
+
+  const wording = [];
+  if (counts.fresh) wording.push("<b>" + counts.fresh + "</b> new");
+  if (counts.changed) wording.push("<b>" + counts.changed + "</b> changed");
+  summary(wording.join(" and ") + " — reading");
+  queue = found;
+  pump();
+}
+
+/* --- connecting --- */
+async function choose() {
+  try {
+    handle = await window.showDirectoryPicker({ id: "roast-coach-folder", mode: "read" });
+    await remember(handle);
+    scannedThisLoad = true;
+    buttons({ connected: true });
+    summary("connected");
+    scan();
+  } catch (error) {
+    if (!error || error.name === "AbortError") return;      // the picker was closed
+    const blocked = error.name === "SecurityError" || error.name === "NotAllowedError" ||
+                    /system files|not allowed|blocked/i.test(error.message || "");
+    say(blocked
+      ? "Chrome will not share that folder — it treats anything inside your system " +
+        "Library as off limits. Copy the roasts to Documents and connect the copy, or " +
+        "use <b>Pick files instead</b> below, which is allowed."
+      : error.message, true);
+    send({ action: "error", blocked, message: String(error.message || error) });
+  }
+}
+
+async function restore() {
+  const saved = await recall();
+  if (!saved) {
+    buttons({ connected: false });
+    say("Not connected yet.");
+    return;
+  }
+  let permission = "prompt";
+  try {
+    permission = await saved.queryPermission({ mode: "read" });
+  } catch (error) { permission = "prompt"; }
+
+  if (permission === "granted") {
+    handle = saved;
+    buttons({ connected: true });
+    if (args.auto && !scannedThisLoad) { scannedThisLoad = true; scan(true); }
+    else summary("");
+    return;
+  }
+
+  // Chrome asks again after a browser restart. One click, not a new folder.
+  buttons({ connected: false, needsClick: true });
+  $("connect").hidden = false;
+  $("connect").textContent = "Reconnect " + saved.name;
+  say('<span class="dot idle"></span>Your browser needs one click to reopen <span ' +
+      'class="folder">' + saved.name + "</span> — it does not ask for the path again.");
+  $("connect").onclick = async () => {
+    let granted = "denied";
+    try { granted = await saved.requestPermission({ mode: "read" }); } catch (error) { }
+    if (granted === "granted") {
+      handle = saved;
+      scannedThisLoad = true;
+      $("connect").textContent = "Connect roasts folder";
+      buttons({ connected: true });
+      scan();
+    } else {
+      choose();
+    }
+  };
+}
+
+$("connect").onclick = choose;
+$("change").onclick = choose;
+$("check").onclick = () => scan();
+$("forget").onclick = async () => {
+  handle = null;
+  queue = [];
+  await remember(null);
+  $("connect").textContent = "Connect roasts folder";
+  buttons({ connected: false });
+  say("Folder disconnected. The roasts already imported are still here.");
+  send({ action: "disconnected" });
+};
+
+if (typeof window.showDirectoryPicker !== "function") {
+  $("connect").disabled = true;
+  say("This browser cannot watch a folder — that is Chrome and Edge only. " +
+      "Use <b>Pick files instead</b> below; it works everywhere.");
+} else {
+  restore();
+}
+setTimeout(height, 200);
+</script>
+</body>
+</html>
