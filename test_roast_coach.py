@@ -311,8 +311,9 @@ check(all("trigger" not in step and "actions" not in step for step in _real_step
 # Coverage for every companion kind, not only beans: "the recipe name never
 # shows up" is the same story as a missing bean, and needs the same answer.
 _cover = library.coverage(joined.to_dict("records"))
-check([item["what"] for item in _cover] == ["Bean or lot", "Recipe", "Roasted by"],
-      "the Data page accounts for every kind a roast can point at",
+check([item["what"] for item in _cover] == ["Bean or lot", "Recipe"],
+      "the Data page accounts for every kind a roast points at — which no longer "
+      "includes who roasted it, because that is typed rather than looked up",
       ", ".join(item["what"] for item in _cover))
 _recipes = next(item for item in _cover if item["kind"] == "recipe")
 check(_recipes["files imported"] >= 1 and _recipes["roasts matched"] >= 1,
@@ -1010,6 +1011,28 @@ check(len(_mine) == 2 and set(_mine["bean"]) == {"Kenya Makwa AA"},
 store.forget(["mac-page-0", "mac-page-1"])
 _shutil.rmtree(_mac_root, ignore_errors=True)
 
+
+print("\nWHO ROASTED IT IS A NAME, NOT AN ACCOUNT HANDLE")
+# RoasTime's userProfiles record holds a sign-in handle — "chris.scherpere",
+# truncated at that — and writing it onto every roast means correcting all of
+# them to say what they would have said anyway.
+library.add_records("userProfile", [{"name": "profile", "text": _json.dumps(
+    {"uid": "user-1", "name": "chris.scherpere", "username": "chris.scherpere"})}])
+_whose = demo_data.history(weeks=1, seed=515)[:1]
+_whose[0]["uid"] = _whose[0]["guid"] = "whose-roast"
+_whose[0]["userId"] = "user-1"
+store.add_roasts(demo_data.as_files(_whose))
+_mine_now = store.load_roasts().set_index("uid").loc["whose-roast"]
+check(pd.isna(_mine_now.get("roasted_by")) or not str(_mine_now.get("roasted_by")).strip(),
+      "a roast does not take RoasTime's account handle as the name of who roasted it",
+      repr(_mine_now.get("roasted_by")))
+check(_app.text_of(_mine_now.get("roasted_by")) == "",
+      "so the screen falls back to whoever roasts here, and shows no 'nan'")
+store.save_notes("whose-roast", {"roasted_by": "Scherpereel"})
+_typed = store.load_roasts().set_index("uid").loc["whose-roast"]
+check(_typed["roasted_by"] == "Scherpereel",
+      "and a typed name is what it keeps, on that roast and no other")
+store.forget(["whose-roast"])
 
 print("\nTHE IBTS IS THE LINE, AND CHARGE IS NOT A RATE OF RISE")
 # Charge is a discontinuity — 280 °C of drum, then cold beans — and the IBTS

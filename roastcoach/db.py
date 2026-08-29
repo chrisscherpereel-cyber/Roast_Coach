@@ -161,7 +161,7 @@ def schema(name: str) -> list[str]:
                coffee TEXT, origin TEXT, process TEXT, variety TEXT, farm TEXT,
                green_weight DOUBLE PRECISION, roast_level TEXT, notes TEXT,
                rating DOUBLE PRECISION, cupping_score DOUBLE PRECISION,
-               is_reference INTEGER DEFAULT 0,
+               is_reference INTEGER DEFAULT 0, roasted_by TEXT,
                colour_whole DOUBLE PRECISION, colour_ground DOUBLE PRECISION,
                colour_sd DOUBLE PRECISION, quaker_count DOUBLE PRECISION,
                visual_defects TEXT, roasted_weight DOUBLE PRECISION,
@@ -236,6 +236,8 @@ ADDED_COLUMNS = {
         "moves": "TEXT",
     },
     "roast_notes": {
+        # RoasTime records a user id and no name, so who roasted it is typed.
+        "roasted_by": "TEXT",
         "colour_whole": "DOUBLE PRECISION",
         "colour_ground": "DOUBLE PRECISION",
         "colour_sd": "DOUBLE PRECISION",

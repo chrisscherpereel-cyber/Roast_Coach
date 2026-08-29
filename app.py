@@ -61,7 +61,7 @@ def load(token) -> pd.DataFrame:
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
 NEEDS = (("roastcoach/store.py", store, 11),
-         ("roastcoach/library.py", library, 8),
+         ("roastcoach/library.py", library, 9),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
@@ -325,11 +325,18 @@ def sidebar_sync():
     if last:
         st.caption(str(last)[:16].replace("T", " "))
 
+    # What this button can and cannot do. It reads the *database* again — which is
+    # everything, when somebody else has synced — but this app runs in the cloud
+    # and cannot reach into the Mac where RoasTime keeps its files. A roast made
+    # this morning is not here until the Mac sends it, and saying "everything was
+    # already up to date" while today's roasts sit on a laptop is a lie of
+    # omission that costs an afternoon.
     if st.button("Update", use_container_width=True, type="primary",
-                 help="Read the database again and put right anything that has fallen "
-                      "behind: roasts written by the Mac sync or by anybody else signed "
-                      "in, measurements from an older version, the links to beans and "
-                      "recipes, and the coach's own learning."):
+                 help="Reads the database again and puts right anything that has fallen "
+                      "behind: roasts sent by the Mac sync or by anybody else signed in, "
+                      "measurements from an older version, the links to beans and "
+                      "recipes, and the coach's own learning. It cannot reach your Mac — "
+                      "new roasts get here by the Mac sync."):
         with st.spinner("Updating…"):
             done = bring_up_to_date()
         fresh = signature()
@@ -343,8 +350,16 @@ def sidebar_sync():
             said.append(f"{done['remeasured']} re-measured")
         if done["graded"]:
             said.append(f"{done['graded']} suggestion(s) graded")
-        st.toast(" · ".join(said) if said else "Everything was already up to date.")
+        st.session_state["_update_found_nothing"] = not said
+        st.toast(" · ".join(said) if said
+                 else "Nothing new in the database — see the sidebar.")
         st.rerun()
+
+    if st.session_state.pop("_update_found_nothing", False):
+        st.caption(":orange[Nothing new was in the database. This app reads the "
+                   "database, not your Mac — a roast is here once the Mac has sent it. "
+                   "**Roasted today?** Open **`mac/roast-sync-app.command`** on the "
+                   "roasting Mac and press *Sync now*, then press **Update** here.]")
 
     behind = optional(store, "outdated", default=0) or 0
     if behind:
@@ -358,10 +373,16 @@ def sidebar_sync():
                  - pd.to_datetime(str(last))).total_seconds() / 3600 if last else None
     except Exception:
         quiet = None
-    if quiet is not None and quiet > 36:
-        st.caption(":orange[Nothing has arrived for "
-                   f"{quiet / 24:.0f} day(s). If you have roasted since, the Mac sync is "
-                   "not running — the **Data** page has the three commands to check.]")
+    # Half a day of quiet is worth a word — a roasting day is a few hours, so a
+    # sync that stopped this morning should be noticed this afternoon, not in
+    # two days' time.
+    if quiet is not None and quiet > 12:
+        gone = (f"{quiet:.0f} hours" if quiet < 48 else f"{quiet / 24:.0f} days")
+        st.caption(f":orange[Nothing has arrived for {gone}. If you have roasted since, "
+                   "the roasts are still on the Mac: open "
+                   "**`mac/roast-sync-app.command`** there and press *Sync now*. To stop "
+                   "having to — the same page has a switch that lets macOS do it every "
+                   "fifteen minutes.]")
 
 
 def account_strip(user: str):

@@ -84,8 +84,9 @@ BEAN_FIELDS = {
 # from counts too; 8 works out which id field identifies a record instead of
 # assuming — twenty-six recipes sharing one machine guid were being stored on top
 # of one another — and matches field names case-blind, which is what finds
-# `recipeID`.
-VERSION = 8
+# `recipeID`; 9 stops putting RoasTime's account handle on every roast as the
+# name of who roasted it.
+VERSION = 9
 
 
 def _now() -> str:
@@ -249,7 +250,13 @@ def link_id(roast: dict, kind: str) -> str | None:
 
 # RoasTime's `containers` are bags of coffee, not machines — the machine is
 # identified by the serial number on the roast itself, which store.py reads.
-OTHER_KINDS = (("recipe", "recipe_name"), ("userProfile", "roasted_by"))
+# Who roasted it is *not* taken from RoasTime. Its `userProfiles` record holds a
+# sign-in handle — "chris.scherpere", truncated at that — which is an account
+# name, not a person's name, and putting it on every roast means the roaster has
+# to correct all of them to say what they would have said anyway. The app
+# defaults to whoever roasts here and takes a typed name over that, and nothing
+# else writes the field.
+OTHER_KINDS = (("recipe", "recipe_name"),)
 
 
 def bean_labels(beans: dict) -> dict:
@@ -726,8 +733,7 @@ def link_report(roast_rows, path: str | None = None, kind: str = "bean") -> dict
 
 # What each kind is called on screen, and which RoasTime folder carries it.
 COMPANIONS = (("bean", "Bean or lot", "beans + containers"),
-              ("recipe", "Recipe", "recipes + officialRecipes"),
-              ("userProfile", "Roasted by", "userProfiles"))
+              ("recipe", "Recipe", "recipes + officialRecipes"))
 
 
 def coverage(roast_rows, path: str | None = None) -> list[dict]:
