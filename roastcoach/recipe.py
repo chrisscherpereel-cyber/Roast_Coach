@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-VERSION = 3
+VERSION = 4
 
 CONTROLS = ("power", "fan", "drum")
 
@@ -142,6 +142,20 @@ def timeline(curve: pd.DataFrame, row=None) -> pd.DataFrame:
                    for at in frame["at"]]
     frame["ibts"] = [_temperature_at(curve, seconds, "ibts_temp", at * 60.0)
                      for at in frame["at"]]
+
+    # Before the turning point the IBTS is not reading beans. It sees the empty
+    # hot drum at charge — 278 °C — then plunges to 25 °C as cold coffee fills
+    # its view, and takes most of a minute to settle onto the bean mass. Printing
+    # those numbers in a column beside "176 °C" invites somebody to wait for a
+    # temperature that has already gone past, so they are left blank: charge is a
+    # moment, not a temperature to aim at.
+    settled = row.get("turningPointTime") if row is not None else None
+    try:
+        settled = float(settled)
+    except (TypeError, ValueError):
+        settled = None
+    if settled is not None and np.isfinite(settled):
+        frame.loc[frame["at"] < settled, "ibts"] = np.nan
 
     for column in columns:
         if column not in frame:
@@ -275,13 +289,16 @@ def plan(moves: pd.DataFrame, changes: list[dict]) -> pd.DataFrame:
     Shown as a plan rather than a diff, because that is how it gets used — read
     down the list while the drum is turning. Anything altered says what it was.
     """
-    columns = ["clock", "at", "bt", "control", "set to", "last time", "why"]
+    # The IBTS is what the plan is read against while the drum turns, so it is
+    # the temperature the plan carries. The bean probe comes along beside it —
+    # RoasTime records both — but nothing here is aimed at it.
+    columns = ["clock", "at", "ibts", "bt", "control", "set to", "last time", "why"]
     rows = []
 
     if moves is not None and not moves.empty:
         for _, item in moves[moves["kind"] == "set"].iterrows():
             rows.append({"clock": item["clock"], "at": float(item["at"]),
-                         "bt": item.get("bt"),
+                         "ibts": item.get("ibts"), "bt": item.get("bt"),
                          "control": item["control"], "set to": item["to"],
                          "last time": item["to"], "why": ""})
 
@@ -297,7 +314,8 @@ def plan(moves: pd.DataFrame, changes: list[dict]) -> pd.DataFrame:
             row["set to"] = change.get("to")
             row["why"] = change.get("why", "")
         else:
-            rows.append({"clock": change["clock"], "at": at, "bt": change.get("bt"),
+            rows.append({"clock": change["clock"], "at": at,
+                         "ibts": change.get("ibts"), "bt": change.get("bt"),
                          "control": control, "set to": change.get("to"),
                          "last time": change.get("from"),
                          "why": change.get("why", "")})

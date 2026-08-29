@@ -632,6 +632,17 @@ check(recipe.when(_change).startswith("192 °C IBTS")
 check(recipe.when({"clock": "4:30", "bt": 165.4}).startswith("165 °C bean probe"),
       "with the bean probe named as the bean probe when that is all there is",
       recipe.when({"clock": "4:30", "bt": 165.4}))
+# The plan is read against the IBTS, so that is the temperature it carries.
+_plan = recipe.plan(_moves, [])
+check("ibts" in _plan.columns,
+      "the next-roast plan carries the IBTS temperature of every move")
+_settled = _plan[_plan["ibts"].notna()]
+check(not _settled.empty and float(_settled.iloc[0]["at"]) >= float(_row["turningPointTime"]),
+      "and none before the turning point, where the sensor is still looking at an "
+      "empty hot drum rather than at beans",
+      f"first IBTS at {float(_settled.iloc[0]['at']):.1f} min, "
+      f"turning point {float(_row['turningPointTime']):.1f} min")
+
 check({"bt", "ibts"} <= set(_moves.columns)
       and _moves["bt"].notna().any(),
       "the recipe timeline carries the temperature each move was made at",

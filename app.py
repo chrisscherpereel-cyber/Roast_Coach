@@ -66,7 +66,7 @@ NEEDS = (("roastcoach/store.py", store, 11),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
          ("roastcoach/evidence.py", evidence, 1),
-         ("roastcoach/recipe.py", recipe, 2))
+         ("roastcoach/recipe.py", recipe, 4))
 
 STALE = [name for name, module, wanted in NEEDS
          if getattr(module, "VERSION", 0) < wanted]
@@ -502,12 +502,26 @@ def next_roast_plan(row, items):
     shown["last time"] = [
         "" if (pd.isna(was) or not changed) else f"was {float(was):.0f}"
         for was, changed in zip(plan["last time"], plan["changed"])]
-    shown["bt"] = shown.get("bt", pd.Series(index=shown.index, dtype=float)).map(
-        lambda v: "" if pd.isna(v) else f"{float(v):.0f} °C")
-    st.dataframe(shown[["clock", "bt", "control", "set to", "last time", "why"]].rename(
-        columns={"clock": "time", "bt": "bean temp", "why": "why it changed"}),
+    for column in ("ibts", "bt"):
+        shown[column] = shown.get(column, pd.Series(index=shown.index, dtype=float)).map(
+            lambda v: "" if pd.isna(v) else f"{float(v):.0f} °C")
+
+    # IBTS first: it is the number on the machine's screen when the change is
+    # made. The clock says whether the roast is on pace, and the bean probe is
+    # there because RoasTime records it — nothing is aimed at it.
+    order = ["ibts", "clock", "control", "set to", "last time", "why"]
+    if shown["bt"].astype(str).str.strip().any():
+        order.insert(2, "bt")
+    st.dataframe(shown[order].rename(
+        columns={"clock": "time", "ibts": "IBTS", "bt": "bean probe",
+                 "why": "why it changed"}),
         width="stretch", hide_index=True,
         height=min(420, 40 + 35 * len(shown)))
+    st.caption("Make each change when the **IBTS** reaches that temperature; the time "
+               "says whether the roast is on pace. The charge settings have no IBTS "
+               "temperature against them because the sensor is looking at an empty hot "
+               "drum until the beans settle — charge is a moment, not a number to wait "
+               "for.")
 
     for change in other:
         if change.get("control") == "drop" and change.get("to") is not None:
