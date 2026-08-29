@@ -60,7 +60,7 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 11),
+NEEDS = (("roastcoach/store.py", store, 12),
          ("roastcoach/library.py", library, 9),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -1213,11 +1213,13 @@ def roast_detail(row, frame, heading: bool = True):
             columns = st.columns(2)
             green = columns[0].number_input(
                 "Green weight (g)", value=float(row.get("greenWeight") or 0), step=10.0)
+            # One list of roast levels in the whole app. Two would let a roast
+            # saved on one screen be silently renamed by the other.
+            _levels = list(getattr(store, "ROAST_LEVELS", ()))
+            _now = text_of(row.get("roast_level"))
             level = columns[1].selectbox(
-                "Roast level", ["", "light", "light-medium", "medium", "medium-dark", "dark"],
-                index=(["", "light", "light-medium", "medium", "medium-dark", "dark"].index(text_of(row.get("roast_level")))
-                       if text_of(row.get("roast_level")) in
-                       ["", "light", "light-medium", "medium", "medium-dark", "dark"] else 0))
+                "Roast level", ["", *_levels],
+                index=(_levels.index(_now) + 1) if _now in _levels else 0)
             columns = st.columns(2)
             rating = columns[0].slider("Rating", 0.0, 5.0,
                                        float(row.get("rating") or 0), step=0.5)
@@ -1886,17 +1888,51 @@ def after_the_roast(row, frame):
     facts[2].metric("First crack", number(row.get("firstCrackTime"), " min"))
     facts[3].metric("Drop IBTS", number(row.get("drumDropTemperature"), " °C", 0))
 
+    # The preparation is chosen outside the form, so the fields change the moment
+    # it is switched rather than on submit. Both preparations are kept: filling in
+    # ground does not clear whole bean, because they are two measurements of one
+    # roast and neither is a correction of the other.
+    preparations = getattr(store, "PREPARATIONS", ("whole bean", "ground"))
+    prepared_on = st.radio(
+        "Colour measured on", preparations, horizontal=True,
+        index=preparations.index(text_of(row.get("colour_prepared_on")))
+        if text_of(row.get("colour_prepared_on")) in preparations else 0,
+        key=f"prep_{row['uid']}",
+        help="A meter reads the same roast lighter ground than whole — by more than "
+             "most of the differences you are trying to see — so which one it was is "
+             "part of the reading. Both are kept; this only chooses what to fill in.")
+
+    shown_scales = (optional(store, "scales_for", prepared_on, default=None)
+                    or [item for item in scales if item[2] == prepared_on] or scales)
+
     with st.form(f'after_{row["uid"]}'):
-        st.markdown("**Roast colour** — whichever meter you have. Each scale is stored as "
-                    "you read it; the app never converts between them, because they do not "
-                    "convert cleanly.")
-        columns = st.columns(len(scales) or 1)
+        st.markdown(f"**Roast colour, read on {prepared_on}** — whichever meter you "
+                    "have. Each scale is stored as you read it; the app never converts "
+                    "between them, because they do not convert cleanly.")
+        columns = st.columns(len(shown_scales) or 1)
         entered = {}
-        for column, (key, name, where, (low, high)) in zip(columns, scales):
+        for column, (key, name, where, (low, high)) in zip(columns, shown_scales):
             entered[key] = column.number_input(
                 name, value=float(row.get(key) or 0), step=1.0, min_value=0.0,
                 max_value=float(high) + 100, help=f"Read on the {where}. Typical range "
                                                   f"{low:.0f}–{high:.0f}.")
+
+        # What is already recorded on the other preparation, so switching away
+        # from a filled-in reading never looks like losing it.
+        other = [item for item in scales if item[2] != prepared_on
+                 and pd.notna(row.get(item[0])) and row.get(item[0])]
+        if other:
+            st.caption("Already recorded on the other preparation: "
+                       + " · ".join(f"{name} {float(row.get(key)):.0f} ({where})"
+                                    for key, name, where, _range in other))
+
+        levels = getattr(store, "ROAST_LEVELS", ())
+        current = text_of(row.get("roast_level"))
+        level = st.selectbox(
+            "Roast level", ["—", *levels],
+            index=(list(levels).index(current) + 1) if current in levels else 0,
+            help="The traditional names, light to dark. What the colour meter reads is "
+                 "the measurement; this is what you would call it.")
 
         columns = st.columns(3)
         spread = columns[0].number_input("Batch colour spread (SD)",
@@ -1933,6 +1969,11 @@ def after_the_roast(row, frame):
                            "cupping_score": score or None, "notes": notes})
             values["roasted_weight"] = out_weight or None
             values["roasted_by"] = roasted_by.strip() or None
+            values["roast_level"] = None if level == "—" else level
+            # Which preparation these numbers were read on. Only the scales for
+            # that preparation are in `values`, so the other one is left exactly
+            # as it was rather than blanked.
+            values["colour_prepared_on"] = prepared_on
             store.save_notes(row["uid"], values)
             refresh()
             st.toast("Saved.")

@@ -167,6 +167,7 @@ def schema(name: str) -> list[str]:
                visual_defects TEXT, roasted_weight DOUBLE PRECISION,
                agtron_commercial DOUBLE PRECISION, agtron_gourmet DOUBLE PRECISION,
                probat_colorette DOUBLE PRECISION, colortrack DOUBLE PRECISION,
+               colortrack_ground DOUBLE PRECISION, colour_prepared_on TEXT,
                updated_at TEXT, updated_by TEXT)""",
 
         # A cup risk the app raised, and what the cupping table said about it.
@@ -238,6 +239,10 @@ ADDED_COLUMNS = {
     "roast_notes": {
         # RoasTime records a user id and no name, so who roasted it is typed.
         "roasted_by": "TEXT",
+        # Colour read on ground coffee reads lighter than the same roast whole,
+        # so the preparation is part of the measurement.
+        "colortrack_ground": "DOUBLE PRECISION",
+        "colour_prepared_on": "TEXT",
         "colour_whole": "DOUBLE PRECISION",
         "colour_ground": "DOUBLE PRECISION",
         "colour_sd": "DOUBLE PRECISION",

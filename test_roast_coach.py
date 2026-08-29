@@ -98,10 +98,18 @@ if SHARED_URL:
     import subprocess
     import sys
 
+    # Pinned uids, not generated ones. demo_data derives a uid from the clock, so
+    # calling history() twice — once in the child to write, once here to clean up
+    # — can produce two different pairs of roasts and leave the second delete
+    # matching nothing. It failed about one run in ten, which is the worst kind
+    # of test: right often enough to be believed.
+    _shared_uids = ["shared-computer-0", "shared-computer-1"]
     script = (
         "import os, json;"
         "from roastcoach import demo_data, store;"
         "roasts = demo_data.history(weeks=2, seed=99)[:2];"
+        "roasts[0]['uid'] = roasts[0]['guid'] = 'shared-computer-0';"
+        "roasts[1]['uid'] = roasts[1]['guid'] = 'shared-computer-1';"
         "print(json.dumps(store.add_roasts(demo_data.as_files(roasts))))"
     )
     other = subprocess.run([sys.executable, "-c", script], capture_output=True, text=True,
@@ -112,7 +120,7 @@ if SHARED_URL:
           "" if added == 2 else other.stderr[-300:])
     check(len(store.load_roasts()) == len(roasts) + 2,
           "and this one sees those roasts without restarting")
-    store.forget([r["uid"] for r in demo_data.history(weeks=2, seed=99)[:2]])
+    store.forget(_shared_uids)
     check(len(store.load_roasts()) == len(roasts), "removing them removes them for everyone")
 
 print("\nEVERYTHING ELSE ROASTIME KEEPS")
@@ -673,16 +681,47 @@ check(not _next.empty and _next["changed"].any(),
 
 print("\nAFTER THE ROAST — what RoasTime cannot know")
 _scales = [key for key, *_rest in store.COLOUR_SCALES]
-check(_scales == ["agtron_commercial", "agtron_gourmet", "probat_colorette", "colortrack"],
-      "all four colour scales are offered", ", ".join(_scales))
+check(set(_scales) == {"agtron_commercial", "agtron_gourmet", "probat_colorette",
+                       "colortrack", "colortrack_ground"},
+      "every colour scale is offered, on both preparations", ", ".join(_scales))
+# A meter reads the same roast lighter ground than whole, so the preparation is
+# part of the measurement rather than a note beside it.
+check([key for key, *_ in store.scales_for("whole bean")]
+      == ["agtron_commercial", "colortrack"],
+      "the whole-bean scales are their own set",
+      ", ".join(key for key, *_ in store.scales_for("whole bean")))
+check([key for key, *_ in store.scales_for("ground")]
+      == ["agtron_gourmet", "probat_colorette", "colortrack_ground"],
+      "and so are the ground ones — Color Track is read on either, and one number "
+      "cannot hold both")
+check(store.ROAST_LEVELS[0] == "Arabic" and store.ROAST_LEVELS[-1] == "Italian"
+      and len(store.ROAST_LEVELS) == 9,
+      "the roast levels are the names roasters use, light to dark",
+      " · ".join(store.ROAST_LEVELS))
+
 store.save_notes(_uid, {"agtron_commercial": 58, "agtron_gourmet": 71,
                         "probat_colorette": 95, "colortrack": 62,
+                        "colortrack_ground": 74, "colour_prepared_on": "whole bean",
+                        "roast_level": "Full City",
                         "roasted_weight": 690.0, "green_weight": 800.0,
                         "quaker_count": 2, "visual_defects": "a little tipping"})
 _after = store.load_roasts().set_index("uid").loc[_uid]
 check(all(float(_after[key]) > 0 for key in _scales),
       "each is stored in the units it was read in, with no conversion between them",
       ", ".join(f"{key}={float(_after[key]):.0f}" for key in _scales))
+check(_after["roast_level"] == "Full City" and _after["colour_prepared_on"] == "whole bean",
+      "the roast level and which preparation the colour was read on are kept with it",
+      f"{_after['roast_level']} · read on {_after['colour_prepared_on']}")
+
+# Filling in one preparation must not wipe the other: they are two measurements
+# of one roast, not a correction of each other.
+store.save_notes(_uid, {"agtron_gourmet": 73, "probat_colorette": 96,
+                        "colortrack_ground": 75, "colour_prepared_on": "ground"})
+_both = store.load_roasts().set_index("uid").loc[_uid]
+check(float(_both["agtron_commercial"]) == 58 and float(_both["agtron_gourmet"]) == 73,
+      "saving the ground readings leaves the whole-bean ones exactly as they were",
+      f"whole {float(_both['agtron_commercial']):.0f} · ground {float(_both['agtron_gourmet']):.0f}")
+
 check(abs(float(_after["weightLossPercent"]) - 13.75) < 0.01,
       "the out weight typed after the roast drives weight loss",
       f"{float(_after['weightLossPercent']):.2f}%")
@@ -1142,6 +1181,28 @@ check(any("Agtron" in label for label in _fields),
       "with the colour scales on it", ", ".join(_fields[:4]))
 check("Roasted by" in _fields,
       "and who roasted it, which RoasTime records as a user id and no name at all")
+
+_prep = [box for box in _entry.radio if box.label == "Colour measured on"]
+check(len(_prep) == 1 and list(_prep[0].options) == ["whole bean", "ground"]
+      and _prep[0].value == "whole bean",
+      "with one preparation shown at a time, whole bean first",
+      f"{list(_prep[0].options)} · showing {_prep[0].value}")
+check(any("Agtron Commercial" in label for label in _fields)
+      and not any("Probat" in label for label in _fields),
+      "so the whole-bean meters are on the form and the ground ones are not",
+      ", ".join(label for label in _fields if "Agtron" in label or "Probat" in label))
+_prep[0].set_value("ground").run()
+_ground = [field.label for field in _entry.number_input]
+check(any("Probat" in label for label in _ground)
+      and not any("Agtron Commercial" in label for label in _ground),
+      "and switching to ground swaps them over",
+      ", ".join(label for label in _ground if "Agtron" in label or "Probat" in label))
+
+_level = [box for box in _entry.selectbox if box.label == "Roast level"]
+check(len(_level) == 1 and "Full City" in list(_level[0].options)
+      and list(_level[0].options)[1] == "Arabic",
+      "and a roast level to pick from, light to dark",
+      " · ".join(str(option) for option in list(_level[0].options)[:5]))
 _by = next(field for field in _entry.text_input if field.label == "Roasted by")
 check(_by.value == _app.DEFAULT_ROASTER,
       "defaulting to whoever roasts here rather than to a number",

@@ -59,15 +59,34 @@ NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
                # Read off whichever meter the roaster owns. Kept as four separate
                # numbers because the scales are not interchangeable and this app
                # will not invent a conversion between them.
-               "agtron_commercial", "agtron_gourmet", "probat_colorette", "colortrack"]
+               "agtron_commercial", "agtron_gourmet", "probat_colorette", "colortrack",
+               "colortrack_ground", "colour_prepared_on"]
 
-# The colour scales, in the order the entry screen shows them.
+# The colour scales, with the preparation each is read on. A colour meter gives
+# a different number for the same roast whole and ground — ground reads lighter,
+# by a margin larger than most of the differences anybody is trying to see — so
+# the preparation is part of the reading, not a note beside it. The entry screen
+# shows one preparation at a time and keeps both.
 COLOUR_SCALES = (
     ("agtron_commercial", "Agtron Commercial", "whole bean", (25, 95)),
+    ("colortrack", "Color Track", "whole bean", (0, 160)),
     ("agtron_gourmet", "Agtron Gourmet (GRmt)", "ground", (25, 95)),
     ("probat_colorette", "Probat Colorette", "ground", (30, 160)),
-    ("colortrack", "Color Track", "whole or ground", (0, 160)),
+    ("colortrack_ground", "Color Track", "ground", (0, 160)),
 )
+
+PREPARATIONS = ("whole bean", "ground")
+
+
+def scales_for(preparation: str) -> tuple:
+    """The colour scales read on one preparation."""
+    return tuple(item for item in COLOUR_SCALES if item[2] == preparation)
+
+
+# How dark, in the words roasters actually use. Ordered light to dark, because
+# that is the only order in which the list means anything.
+ROAST_LEVELS = ("Arabic", "Cinnamon", "New England", "American", "City",
+                "Full City", "Vienna", "French", "Italian")
 
 TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
           "effects", "rule_stats", "sources", "reference", "sensory")
@@ -89,7 +108,9 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #  10  seal_unread(): a roast whose file is gone stops being counted as work
 #      outstanding, so no warning stands that nobody can act on
 #  11  who roasted it is something the roaster types, not something RoasTime knows
-VERSION = 11
+#  12  colour is recorded per preparation — whole bean or ground — and the roast
+#      level has the names roasters use for it
+VERSION = 12
 
 
 # What the importer keeps off a roast file. A roast stamped with an older number
