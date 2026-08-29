@@ -98,7 +98,10 @@ SHOWN_DECIMALS = 1
 # 3  2026-08-27: crash measured as a percentage fall from the roast's own
 #    pre-crack baseline instead of a fixed °C/min; flick, stall and negative rate
 #    of rise measured with durations; reversals counted.
-METRICS_VERSION = 3
+# 4  2026-08-29: peak rate of rise measured from the turning point rather than
+#    from charge. Charge is a discontinuity — cold beans on a hot drum — and
+#    including it reported a peak of 169 °C/min for a roast that peaked at 19.
+METRICS_VERSION = 4
 
 # What this file can do — see the note in store.py. 2 adds phase_shares() and the
 # shared bands; 3 measures crash, flick, stall and negative rate of rise
@@ -229,15 +232,26 @@ def _minutes(index, sample_rate: float) -> float:
     return float(index) / sample_rate / 60.0
 
 
-def _peak(series: pd.Series, window: int) -> tuple[float, float]:
-    """(peak value, index) of the centred rolling mean."""
+def _peak(series: pd.Series, window: int, after=None) -> tuple[float, float]:
+    """(peak value, index) of the centred rolling mean, after the turning point.
+
+    Charge is a discontinuity, not a rate of rise. Cold beans hitting a hot drum
+    send the IBTS through a transient of well over a hundred °C/min for a few
+    seconds, and a peak taken over the whole series reports that — "peak rate of
+    rise 169 °C/min" for a roast whose real peak was 19. The number a roaster
+    means is the peak of the roast, which begins at the turning point, so that is
+    where the search begins.
+    """
     if series.dropna().empty:
         return np.nan, np.nan
-    rolled = series.rolling(window=max(3, window), center=True, min_periods=max(2, window // 2)).mean()
+    rolled = series.rolling(window=max(3, window), center=True,
+                            min_periods=max(2, window // 2)).mean()
+    if after is not None and np.isfinite(after):
+        rolled = rolled.loc[int(after):]
     if rolled.dropna().empty:
         return np.nan, np.nan
     position = int(rolled.idxmax())
-    return float(rolled.iloc[position]), float(position)
+    return float(rolled.loc[position]), float(position)
 
 
 def _smooth(series: pd.Series, window: int) -> pd.Series:
@@ -557,10 +571,11 @@ def curve_metrics(roast_json: dict) -> dict:
     if drum_ror.dropna().empty and not drum.dropna().empty:
         drum_ror = drum.diff() * 60.0 * sample_rate
 
-    peak, position = _peak(bean_ror, window)
+    after_charge = metrics.get("indexTurningPoint")
+    peak, position = _peak(bean_ror, window, after_charge)
     metrics["peakROR"] = peak
     metrics["peakRORTime"] = _minutes(position, sample_rate)
-    peak, position = _peak(drum_ror, window)
+    peak, position = _peak(drum_ror, window, after_charge)
     metrics["peakIbtsROR"] = peak
     metrics["peakIbtsRORTime"] = _minutes(position, sample_rate)
 

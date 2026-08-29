@@ -25,6 +25,22 @@ ASSETS = Path(__file__).parent / "assets"
 st.set_page_config(page_title="Roast Coach", page_icon=str(ASSETS / "icon-64.png"),
                    layout="wide", initial_sidebar_state="expanded")
 
+# Whoever is at the machine unless a roast says otherwise. RoasTime records a
+# user id, not a name, and one roastery is usually one roaster.
+DEFAULT_ROASTER = os.environ.get("ROAST_COACH_ROASTER", "Scherpereel")
+
+# Streamlit sets a metric's value in 2.25rem, which is a headline size. It suits
+# a number and defeats a name: at that size "Zambia Isanya Estate AA" is clipped
+# to "Zambia Isan…" in a third of a screen. Numbers here are short, names are
+# long, and the page reads better with both a size smaller.
+st.markdown("""
+<style>
+  [data-testid="stMetricValue"] { font-size: 1.45rem; line-height: 1.25; }
+  [data-testid="stMetricLabel"] p { font-size: .82rem; opacity: .72; }
+  [data-testid="stMetricValue"] div { white-space: normal; }
+</style>
+""", unsafe_allow_html=True)
+
 
 # ---------------------------------------------------------------------------
 # Shared state
@@ -44,7 +60,7 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 10),
+NEEDS = (("roastcoach/store.py", store, 11),
          ("roastcoach/library.py", library, 8),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -800,6 +816,32 @@ def moves_for(roast_id: str, token):
     return recipe.timeline(store.load_curve(roast_id), None)
 
 
+def identity(row):
+    """The three names of a roast, written out in full.
+
+    What it was called, what was in the drum, and what it was run from. These are
+    the fields most worth reading exactly — "Zambia Isanya Estate AA" and "Zambia
+    Isanya Estate AB" differ in their last letter — and a metric tile, which sets
+    its value in 2.2rem and clips what does not fit, is the one component
+    guaranteed to hide that. So: label above, full name below, at reading size.
+    """
+    fields = (
+        ("Roast name", text_of(row.get("roast_name")) or "—", ""),
+        ("Bean", text_of(row.get("bean")) or "no bean file",
+         text_of(row.get("lot_name"))),
+        ("Recipe", text_of(row.get("recipe_name")) or "—", ""),
+        ("Roasted by", text_of(row.get("roasted_by")) or DEFAULT_ROASTER, ""),
+    )
+    for column, (label, value, note) in zip(st.columns(len(fields)), fields):
+        column.markdown(
+            f"<div style='font-size:.78rem;opacity:.62;letter-spacing:.02em'>{label}</div>"
+            f"<div style='font-size:1.05rem;font-weight:600;line-height:1.3'>{value}</div>"
+            + (f"<div style='font-size:.78rem;opacity:.62'>from the bag “{note}”</div>"
+               if note else ""),
+            unsafe_allow_html=True)
+    st.write("")
+
+
 def recipe_as_written(row):
     """The recipe RoasTime holds, beside the roast that was actually run.
 
@@ -1007,9 +1049,14 @@ def readout(row):
             ("Total time", clock(total)),
             ("End temp", number(row.get("drumDropTemperature"), " °C", 1)),
         ]),
+        # Everything here is measured on the IBTS. The bean probe is buried in the
+        # drum and lags what the beans are actually doing — close enough to a drum
+        # reading that nothing in this app is decided on it. It is shown because
+        # RoasTime shows it, and labelled so it cannot be mistaken for the line
+        # the roast is read by.
         block("Rate of rise", [
-            ("Peak (bean)", number(row.get("peakROR"), " °C/min")),
             ("Peak (IBTS)", number(row.get("peakIbtsROR"), " °C/min")),
+            ("Peak (bean probe)", number(row.get("peakROR"), " °C/min")),
             ("At first crack", number(row.get("rorAtFirstCrack"), " °C/min")),
             ("At drop", number(row.get("rorAtDrop"), " °C/min")),
             ("Drying average", number(row.get("avgRoRDrying"), " °C/min")),
@@ -1070,13 +1117,11 @@ def roast_detail(row, frame, heading: bool = True):
                 charts.roast_profile_figure(samples, events, theme(), title=row["label"]),
                 width="stretch")
 
-        names = st.columns(3)
-        names[0].metric("Roast name", text_of(row.get("roast_name")) or "—")
-        names[1].metric("Bean", text_of(row.get("bean")) or "no bean file",
-                        help="What RoasTime says was in the drum. This is what the roast is "
-                             "compared against.")
-        names[2].metric("Recipe", text_of(row.get("recipe_name")) or "—",
-                        help="The profile this roast was run from, as RoasTime recorded it.")
+        # Names are not numbers. A metric tile sets its value in 2.2rem, which
+        # turns "Zambia Isanya Estate AA" into "Zambia Isan…" — the one thing on
+        # the row nobody can guess from its first eleven letters. So they are
+        # written out, in full, at reading size.
+        identity(row)
 
         facts = st.columns(4)
         facts[0].metric("Total", number(row.get("totalRoastMinutes"), " min"))
@@ -1086,15 +1131,23 @@ def roast_detail(row, frame, heading: bool = True):
         facts[2].metric("Development", number(row.get("developmentTime"), " min"),
                         help=(f"{shares['development']:.1f}% of the roast"
                               if "development" in shares else None))
-        facts[3].metric("Drop", number(row.get("drumDropTemperature"), " °C", 0))
+        facts[3].metric("Drop IBTS", number(row.get("drumDropTemperature"), " °C", 0))
 
         more = st.columns(4)
         more[0].metric("Turning point", number(row.get("turningPointTime"), " min"))
         more[1].metric("Yellowing", number(row.get("yellowPointTime"), " min"))
-        more[2].metric("Peak RoR", number(row.get("peakROR"), " °C/min"))
+        # The IBTS rate of rise, not the bean probe's. The IBTS is what the roast
+        # is read and driven by; the probe lags it and, buried in the drum, is
+        # closer to a drum reading than a bean one.
+        more[2].metric("Peak RoR (IBTS)",
+                       number(row.get("peakIbtsROR") if pd.notna(row.get("peakIbtsROR"))
+                              else row.get("peakROR"), " °C/min"))
         more[3].metric("Weight loss", number(row.get("weightLossPercent"), " %"))
 
-        st.markdown("#### The recipe you actually ran")
+        st.markdown("#### How this roast was actually managed")
+        st.caption("Every control change as it happened, at the IBTS temperature it was "
+                   "made at. This is what you did on the day — not the recipe, which did "
+                   "not change.")
         recipe_panel(row)
         recipe_as_written(row)
 
@@ -1791,12 +1844,12 @@ def after_the_roast(row, frame):
     scales = getattr(store, "COLOUR_SCALES", ())
 
 
-    facts = st.columns(5)
-    facts[0].metric("Roast name", text_of(row.get("roast_name"))[:22] or "—")
-    facts[1].metric("Bean", text_of(row.get("bean"))[:22] or "no bean file")
-    facts[2].metric("Recipe", text_of(row.get("recipe_name"))[:22] or "—")
-    facts[3].metric("Green in", number(row.get("greenWeight"), " g", 0))
-    facts[4].metric("Total", number(row.get("totalRoastMinutes"), " min"))
+    identity(row)
+    facts = st.columns(4)
+    facts[0].metric("Green in", number(row.get("greenWeight"), " g", 0))
+    facts[1].metric("Total", number(row.get("totalRoastMinutes"), " min"))
+    facts[2].metric("First crack", number(row.get("firstCrackTime"), " min"))
+    facts[3].metric("Drop IBTS", number(row.get("drumDropTemperature"), " °C", 0))
 
     with st.form(f'after_{row["uid"]}'):
         st.markdown("**Roast colour** — whichever meter you have. Each scale is stored as "
@@ -1823,6 +1876,14 @@ def after_the_roast(row, frame):
             "What the beans looked like", value=text_of(row.get("visual_defects")),
             placeholder="scorching · tipping · facing · charring · mottling · even")
 
+        # RoasTime records a user id, not a name, so this arrives as a number or
+        # not at all. One roastery is usually one roaster: default to them, and
+        # let it be changed on the roast that somebody else ran.
+        roasted_by = st.text_input(
+            "Roasted by", value=text_of(row.get("roasted_by")) or DEFAULT_ROASTER,
+            help="Defaults to whoever normally roasts here. Change it for a roast "
+                 "somebody else ran, and it stays changed.")
+
         columns = st.columns(2)
         rating = columns[0].slider("Rating", 0.0, 5.0, float(row.get("rating") or 0), step=0.5)
         score = columns[1].number_input("Cupping score",
@@ -1836,6 +1897,7 @@ def after_the_roast(row, frame):
                            "visual_defects": defects.strip(), "rating": rating or None,
                            "cupping_score": score or None, "notes": notes})
             values["roasted_weight"] = out_weight or None
+            values["roasted_by"] = roasted_by.strip() or None
             store.save_notes(row["uid"], values)
             refresh()
             st.toast("Saved.")
@@ -1988,6 +2050,58 @@ def go_placeholder():
     return go.Figure()
 
 
+def page_after():
+    """The after-the-roast input screen: what only the roaster can know.
+
+    This has to be a page of its own. Folding it into the roast detail made it
+    disappear — and the job it serves is a different job: you sit down with four
+    roasts you cupped this morning and fill them all in, one after another, which
+    is a list to work through rather than a roast to read.
+    """
+    frame = roasts()
+    if frame.empty:
+        empty_state("Roast Coach has no roasts yet.")
+
+    brand_header("What RoasTime cannot know — colour, weights, defects, the cup")
+
+    scales = getattr(store, "COLOUR_SCALES", ())
+    colour_columns = [key for key, *_ in scales]
+
+    def missing(row) -> list[str]:
+        gaps = []
+        if not any(pd.notna(row.get(key)) and row.get(key) for key in colour_columns):
+            gaps.append("colour")
+        if not (pd.notna(row.get("weightRoasted")) and row.get("weightRoasted")):
+            gaps.append("out weight")
+        if not text_of(row.get("notes")):
+            gaps.append("notes")
+        return gaps
+
+    recent = frame.sort_values("roasted_at", ascending=False)
+    waiting = [(uid, label, gaps) for uid, label, gaps in
+               ((r["uid"], r["label"], missing(r)) for _, r in recent.iterrows()) if gaps]
+
+    top = st.columns([1, 1, 2])
+    top[0].metric("Roasts", len(frame))
+    top[1].metric("Still to fill in", len(waiting))
+    if waiting:
+        top[2].caption("Newest first. Pick one, fill in what you have, save — the roast "
+                       "list and every comparison pick it up straight away.")
+
+    choices = [(uid, f"{label}  ·  missing {', '.join(gaps)}") for uid, label, gaps in waiting]
+    choices += [(r["uid"], f"{r['label']}  ·  complete")
+                for _, r in recent.iterrows()
+                if r["uid"] not in {uid for uid, _, _ in waiting}]
+    if not choices:
+        st.success("Nothing outstanding.", icon=":material/check:")
+        return
+
+    picked = st.selectbox("Roast", [uid for uid, _ in choices],
+                          format_func=lambda uid: dict(choices)[uid])
+    row = frame[frame["uid"] == picked].iloc[0]
+    after_the_roast(row, frame)
+
+
 def page_compare():
     frame = roasts()
     if frame.empty:
@@ -2033,7 +2147,7 @@ def page_compare():
                              r.get("firstCrackTime")).get("development", float("nan"))
                 for _, r in part.iterrows()])), include_groups=False).round(1),
         "total": grouped["totalRoastMinutes"].mean().round(2),
-        "drop °C": grouped["drumDropTemperature"].mean().round(0),
+        "drop °C IBTS": grouped["drumDropTemperature"].mean().round(0),
         "weight loss %": grouped["weightLossPercent"].mean().round(1),
         "spread of first crack": grouped["firstCrackTime"].std().round(2),
         "rating": grouped["rating"].mean().round(2),
@@ -2062,7 +2176,7 @@ def page_compare():
                "combination has been, which is usually the more interesting number.")
 
     measure = st.selectbox(
-        "Chart", ["development %", "first crack", "development", "total", "drop °C",
+        "Chart", ["development %", "first crack", "development", "total", "drop °C IBTS",
                   "weight loss %", "rating"], index=0)
     chart = summary[measure].dropna()
     if not chart.empty:
@@ -2247,18 +2361,21 @@ def main():
     user = auth.require(logo=_mark())
     account_strip(user)
 
-    # Four pages, in the order a roast lives through them: what to change next,
-    # the roast itself, how it compares, and everything that is about the app
-    # rather than about coffee. What was seven had the same roast on three of
-    # them — you filled in the cup on one page and read the curve on another.
+    # Five pages, in the order a roast lives through them: what to change next,
+    # the roast itself, what you learned from cupping it, how it compares, and
+    # everything that is about the app rather than about coffee. Seven was too
+    # many — Learning belongs at the foot of Compare and Method beside Data — but
+    # writing down what a roast tasted like is its own sitting, with its own list
+    # of what is still outstanding, and it needs a door of its own.
     pages = [
         st.Page(page_coach, title="Coach", icon=":material/insights:"),
         st.Page(page_roasts, title="Roasts", icon=":material/local_fire_department:"),
+        st.Page(page_after, title="After the roast", icon=":material/edit_note:"),
         st.Page(page_compare, title="Compare", icon=":material/analytics:"),
         st.Page(page_setup, title="Setup", icon=":material/settings:"),
     ]
 
-    # The test suite opens one page at a time; the browser always gets all four.
+    # The test suite opens one page at a time; the browser always gets all five.
     only = os.environ.get("ROAST_COACH_PAGE")
     if only:
         pages = [page for page in pages if page.title == only] or pages

@@ -1011,7 +1011,27 @@ store.forget(["mac-page-0", "mac-page-1"])
 _shutil.rmtree(_mac_root, ignore_errors=True)
 
 
-print("\nFOUR PAGES, AND ROASTS SIDE BY SIDE")
+print("\nTHE IBTS IS THE LINE, AND CHARGE IS NOT A RATE OF RISE")
+# Charge is a discontinuity — 280 °C of drum, then cold beans — and the IBTS
+# spends a few seconds recovering onto the bean mass. Measuring a peak across it
+# reported 169 °C/min for a roast whose real peak was 45.
+_charge = demo_data.history(weeks=1, seed=246)[:1]
+_charge[0]["uid"] = _charge[0]["guid"] = "charge-spike"
+_spike = list(_charge[0]["ibtsDerivative"])
+_spike[:8] = [180.0, 220.0, 205.0, 160.0, 120.0, 95.0, 70.0, 60.0]
+_charge[0]["ibtsDerivative"] = _spike
+store.add_roasts(demo_data.as_files(_charge))
+_measured = store.load_roasts().set_index("uid").loc["charge-spike"]
+check(float(_measured["peakIbtsROR"]) < 100,
+      "the charge transient is not reported as the roast's peak rate of rise",
+      f"{float(_measured['peakIbtsROR']):.1f} °C/min")
+check(float(_measured["peakIbtsRORTime"]) >= float(_measured["turningPointTime"]),
+      "because the peak is looked for from the turning point, where the roast starts",
+      f"peak at {float(_measured['peakIbtsRORTime']):.1f} min, "
+      f"turning point {float(_measured['turningPointTime']):.1f} min")
+store.forget(["charge-spike"])
+
+print("\nFIVE PAGES, AND ROASTS SIDE BY SIDE")
 from roastcoach import charts as _charts  # noqa: E402
 from roastcoach.curves import create_roast_samples as _samples_of  # noqa: E402
 
@@ -1075,6 +1095,39 @@ check(not _one.exception, "the Roasts page opens",
 check(any("After the roast" in str(getattr(tab, "label", "")) for tab in _one.tabs),
       "and carries the after-the-roast entry on the roast itself",
       ", ".join(str(getattr(tab, "label", "")) for tab in _one.tabs))
+os.environ["ROAST_COACH_PAGE"] = "After the roast"
+_entry = AppTest.from_file("app.py", default_timeout=300)
+_entry.session_state[auth.SESSION_KEY] = "tester"
+_entry.run()
+check(not _entry.exception, "the after-the-roast input screen has a page of its own — "
+      "cupping four roasts is a list to work through, not a roast to read",
+      str(_entry.exception[0].message)[:160] if _entry.exception else "")
+_fields = [field.label for field in _entry.number_input] + \
+          [field.label for field in _entry.text_input]
+check(any("Agtron" in label for label in _fields),
+      "with the colour scales on it", ", ".join(_fields[:4]))
+check("Roasted by" in _fields,
+      "and who roasted it, which RoasTime records as a user id and no name at all")
+_by = next(field for field in _entry.text_input if field.label == "Roasted by")
+check(_by.value == _app.DEFAULT_ROASTER,
+      "defaulting to whoever roasts here rather than to a number",
+      str(_by.value))
+
+# Names are read, not glanced at: two lots of one estate can differ in their last
+# letter, and a metric tile clips at about eleven characters.
+_long = demo_data.history(weeks=1, seed=99)[:1]
+_long[0]["uid"] = _long[0]["guid"] = "long-name"
+_long[0]["roastName"] = "Zambia Isanya Estate AA washed 8-26-2026"
+store.add_roasts(demo_data.as_files(_long))
+os.environ["ROAST_COACH_PAGE"] = "Roasts"
+_names = AppTest.from_file("app.py", default_timeout=300)
+_names.session_state[auth.SESSION_KEY] = "tester"
+_names.run()
+_written = " ".join(item.value for item in _names.markdown)
+check("Zambia Isanya Estate AA washed 8-26-2026" in _written,
+      "so a long roast name is written out in full, not clipped to a metric tile")
+store.forget(["long-name"])
+
 os.environ.pop("ROAST_COACH_PAGE", None)
 store.forget([f"side-{n}" for n in range(5)])
 
@@ -1194,11 +1247,11 @@ store.forget(["sidebar-0", "sidebar-1"])
 os.environ.pop("ROAST_COACH_PAGE", None)
 
 
-# Four pages now, not seven. "After the roast" is a tab on the roast itself,
-# "Learning" is the last section of Compare, and "Data" and "Method" are the two
-# tabs of Setup — because the roast you are reading and the roast you are writing
-# notes about are the same roast.
-for page in ("Coach", "Roasts", "Compare", "Setup"):
+# Five pages now, not seven. "Learning" is the last section of Compare and
+# "Data" and "Method" are the two tabs of Setup. "After the roast" keeps a page
+# of its own — filling in four roasts you cupped this morning is a list to work
+# through, not a roast to read — and also appears as a tab on the roast itself.
+for page in ("Coach", "Roasts", "After the roast", "Compare", "Setup"):
     os.environ["ROAST_COACH_PAGE"] = page
     opened = AppTest.from_file("app.py", default_timeout=300)
     opened.session_state[auth.SESSION_KEY] = "tester"
@@ -1230,7 +1283,7 @@ del library.link_report
 del _metrics_module.phase_shares
 store.VERSION = library.VERSION = _metrics_module.VERSION = 1
 try:
-    for page in ("Coach", "Roasts", "Compare", "Setup"):
+    for page in ("Coach", "Roasts", "After the roast", "Compare", "Setup"):
         os.environ["ROAST_COACH_PAGE"] = page
         half = AppTest.from_file("app.py", default_timeout=120)
         half.session_state[auth.SESSION_KEY] = "tester"

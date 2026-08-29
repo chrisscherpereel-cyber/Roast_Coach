@@ -49,6 +49,9 @@ SERIES_COLUMNS = [column for column in CURVE_COLUMNS if column != "roast_id"]
 
 NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
                "roast_level", "notes", "rating", "cupping_score", "is_reference",
+               # Who ran it. RoasTime records a user id rather than a name, so
+               # this is one of the few things only a person can supply.
+               "roasted_by",
                # What no probe can see: measured colour, how evenly the batch
                # roasted, quakers picked out, and what the beans looked like.
                "colour_whole", "colour_ground", "colour_sd", "quaker_count",
@@ -85,7 +88,8 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #      when the files need reading again — nobody has to know to ask
 #  10  seal_unread(): a roast whose file is gone stops being counted as work
 #      outstanding, so no warning stands that nobody can act on
-VERSION = 10
+#  11  who roasted it is something the roaster types, not something RoasTime knows
+VERSION = 11
 
 
 # What the importer keeps off a roast file. A roast stamped with an older number

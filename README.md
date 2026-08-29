@@ -112,7 +112,8 @@ Three things about that folder are worth knowing, because each of them cost a ro
 - **Recipes are a file, not a field.** `recipes/` and `officialRecipes/` hold the recipe as
   written — its name, its roast degree, and its steps with the temperature or the time each
   one fires at. Each roast shows that recipe beside what actually happened, under **The
-  recipe you actually ran**, with the raw record one click away.
+  recipe as written**, with the raw record one click away — beside, and clearly apart
+  from, what you actually did on the day.
 
 Recipes are set by temperature far more often than by the clock, so every step is shown
 both ways: the temperature it was written for, and the moment on this roast's curve where
@@ -199,11 +200,17 @@ and that is the number on screen while the drum turns, so it leads; the time tel
 whether the roast is on pace.
 
 **Roasts** — every roast by date and coffee, with three names kept apart (roast name, bean,
-recipe). Open one and it has two tabs: **What happened** — the profile, the readout, the
-recipe as written against what you actually ran, and what the roast did — and **After the
-roast**, where colour, weights, defects, rating and tasting notes are entered. Those were
-two pages until they were not: reading a roast and writing down how it tasted are the same
-roast, and finding it twice was silly.
+recipe), written out in full rather than clipped. Open one for the profile, the readout,
+**how the roast was actually managed** — every control change at the IBTS temperature it
+was made at, which is not the same thing as the recipe and is no longer labelled as
+though it were — and what the roast did. The after-the-roast entry is here too, as a tab,
+for when you are already looking at the roast.
+
+**After the roast** — the input screen for everything RoasTime cannot know: colour on
+whichever meter you own, out weight, batch spread, quakers, what the beans looked like,
+rating, cupping score, tasting notes, and who roasted it. It keeps its own page because
+filling in four roasts you cupped this morning is a list to work through, not a roast to
+read — and it says how many are still outstanding.
 
 **Compare** — two things, in that order. **Particular roasts you pick**, overlaid on one
 pair of axes (IBTS and its rate of rise), optionally lined up at first crack so development
@@ -226,13 +233,22 @@ the end of its line — and a fourth roast gets its own panel on the same axes i
 the first roast you picked drawn faintly behind each of the others. That is a real
 comparison rather than a knot of lines.
 
-### The two probes, named for what they are
+### The two probes, and which one everything is measured on
 
 The Bullet has an **IBTS** — an infrared sensor reading the bean mass — and a **bean
-probe** buried in the beans. RoasTime stores the IBTS in a field called `drumTemperature`,
-which invites exactly the wrong reading, and this app used to repeat it. The IBTS is not the
-drum: it is what the recipes are written against and what the roaster watches, so it is
-named IBTS everywhere it appears, and the physical probe is called the bean probe.
+probe** buried in the drum. RoasTime stores the IBTS in a field called `drumTemperature`,
+which invites exactly the wrong reading, and this app used to repeat it.
+
+Everything the app decides is measured on the **IBTS**: the rate of rise and its peak, the
+crash and flick detection, the phase averages, the drop temperature, and the temperature
+each control change is given at. The bean probe lags the beans badly enough to be closer to
+a drum reading than a bean one, so it is shown — RoasTime shows it — and clearly labelled,
+and nothing rests on it.
+
+**Charge is not a rate of rise.** Cold beans on a 280 °C drum send the IBTS through a
+transient of over 200 °C/min for a few seconds while the sensor recovers onto the bean
+mass. A peak taken across that reported *169 °C/min* for a roast that really peaked at 45.
+The peak is measured from the turning point, where the roast actually starts.
 
 ---
 
