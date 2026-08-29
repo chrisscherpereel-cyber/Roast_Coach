@@ -1902,6 +1902,8 @@ def after_the_roast(row, frame):
              "most of the differences you are trying to see — so which one it was is "
              "part of the reading. Both are kept; this only chooses what to fill in.")
 
+    # The same four meters either way — a meter reads whatever you put under it.
+    # The toggle chooses which pair of readings you are filling in, nothing else.
     shown_scales = (optional(store, "scales_for", prepared_on, default=None)
                     or [item for item in scales if item[2] == prepared_on] or scales)
 
@@ -1919,12 +1921,12 @@ def after_the_roast(row, frame):
 
         # What is already recorded on the other preparation, so switching away
         # from a filled-in reading never looks like losing it.
-        other = [item for item in scales if item[2] != prepared_on
-                 and pd.notna(row.get(item[0])) and row.get(item[0])]
-        if other:
-            st.caption("Already recorded on the other preparation: "
-                       + " · ".join(f"{name} {float(row.get(key)):.0f} ({where})"
-                                    for key, name, where, _range in other))
+        elsewhere = [item for item in scales if item[2] != prepared_on
+                     and pd.notna(row.get(item[0])) and row.get(item[0])]
+        if elsewhere:
+            st.caption(f"Already recorded on {elsewhere[0][2]}: "
+                       + " · ".join(f"{name} {float(row.get(key)):.0f}"
+                                    for key, name, _where, _range in elsewhere))
 
         levels = getattr(store, "ROAST_LEVELS", ())
         current = text_of(row.get("roast_level"))

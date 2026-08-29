@@ -680,47 +680,75 @@ check(not _next.empty and _next["changed"].any(),
       f"{len(_next)} steps, {int(_next['changed'].sum())} changed")
 
 print("\nAFTER THE ROAST — what RoasTime cannot know")
-_scales = [key for key, *_rest in store.COLOUR_SCALES]
-check(set(_scales) == {"agtron_commercial", "agtron_gourmet", "probat_colorette",
-                       "colortrack", "colortrack_ground"},
-      "every colour scale is offered, on both preparations", ", ".join(_scales))
-# A meter reads the same roast lighter ground than whole, so the preparation is
-# part of the measurement rather than a note beside it.
+_meters = [name for _key, name, _span in store.METERS]
+check(len(store.METERS) == 4 and len(store.COLOUR_SCALES) == 8,
+      "four colour meters, each with a reading for whole bean and for ground",
+      " · ".join(_meters))
+# A meter reads whatever is put under it. What changes between preparations is
+# the number it gives — the same roast reads lighter ground — so every meter is
+# offered on both, and the two readings are kept apart.
 check([key for key, *_ in store.scales_for("whole bean")]
-      == ["agtron_commercial", "colortrack"],
-      "the whole-bean scales are their own set",
+      == ["agtron_commercial_whole", "agtron_gourmet_whole",
+          "probat_colorette_whole", "colortrack_whole"],
+      "all four are offered on whole bean",
       ", ".join(key for key, *_ in store.scales_for("whole bean")))
 check([key for key, *_ in store.scales_for("ground")]
-      == ["agtron_gourmet", "probat_colorette", "colortrack_ground"],
-      "and so are the ground ones — Color Track is read on either, and one number "
-      "cannot hold both")
+      == ["agtron_commercial_ground", "agtron_gourmet_ground",
+          "probat_colorette_ground", "colortrack_ground"],
+      "and all four on ground — the toggle changes which readings you fill in, "
+      "not which meters exist")
+_scales = [key for key, *_rest in store.COLOUR_SCALES]
 check(store.ROAST_LEVELS[0] == "Arabic" and store.ROAST_LEVELS[-1] == "Italian"
       and len(store.ROAST_LEVELS) == 9,
       "the roast levels are the names roasters use, light to dark",
       " · ".join(store.ROAST_LEVELS))
 
-store.save_notes(_uid, {"agtron_commercial": 58, "agtron_gourmet": 71,
-                        "probat_colorette": 95, "colortrack": 62,
-                        "colortrack_ground": 74, "colour_prepared_on": "whole bean",
+store.save_notes(_uid, {"agtron_commercial_whole": 58, "agtron_gourmet_whole": 71,
+                        "probat_colorette_whole": 95, "colortrack_whole": 62,
+                        "colour_prepared_on": "whole bean",
                         "roast_level": "Full City",
                         "roasted_weight": 690.0, "green_weight": 800.0,
                         "quaker_count": 2, "visual_defects": "a little tipping"})
 _after = store.load_roasts().set_index("uid").loc[_uid]
-check(all(float(_after[key]) > 0 for key in _scales),
+_whole = [key for key, *_ in store.scales_for("whole bean")]
+check(all(float(_after[key]) > 0 for key in _whole),
       "each is stored in the units it was read in, with no conversion between them",
-      ", ".join(f"{key}={float(_after[key]):.0f}" for key in _scales))
+      ", ".join(f"{key}={float(_after[key]):.0f}" for key in _whole))
 check(_after["roast_level"] == "Full City" and _after["colour_prepared_on"] == "whole bean",
       "the roast level and which preparation the colour was read on are kept with it",
       f"{_after['roast_level']} · read on {_after['colour_prepared_on']}")
 
 # Filling in one preparation must not wipe the other: they are two measurements
 # of one roast, not a correction of each other.
-store.save_notes(_uid, {"agtron_gourmet": 73, "probat_colorette": 96,
-                        "colortrack_ground": 75, "colour_prepared_on": "ground"})
+store.save_notes(_uid, {"agtron_commercial_ground": 63, "agtron_gourmet_ground": 73,
+                        "probat_colorette_ground": 96, "colortrack_ground": 75,
+                        "colour_prepared_on": "ground"})
 _both = store.load_roasts().set_index("uid").loc[_uid]
-check(float(_both["agtron_commercial"]) == 58 and float(_both["agtron_gourmet"]) == 73,
-      "saving the ground readings leaves the whole-bean ones exactly as they were",
-      f"whole {float(_both['agtron_commercial']):.0f} · ground {float(_both['agtron_gourmet']):.0f}")
+check(float(_both["agtron_commercial_whole"]) == 58
+      and float(_both["agtron_commercial_ground"]) == 63,
+      "one meter holds both readings, and saving the ground one leaves the whole-bean "
+      "one exactly as it was",
+      f"whole {float(_both['agtron_commercial_whole']):.0f} · "
+      f"ground {float(_both['agtron_commercial_ground']):.0f}")
+
+# Colour entered before every meter had both preparations must not vanish.
+_legacy = demo_data.history(weeks=1, seed=606)[:1]
+_legacy[0]["uid"] = _legacy[0]["guid"] = "legacy-colour-roast"
+store.add_roasts(demo_data.as_files(_legacy))
+store.save_notes("legacy-colour-roast", {"agtron_commercial": 55, "agtron_gourmet": 70,
+                                         "colortrack": 61, "probat_colorette": 92})
+_kept = store.load_roasts().set_index("uid").loc["legacy-colour-roast"]
+check(float(_kept["agtron_commercial_whole"]) == 55
+      and float(_kept["colortrack_whole"]) == 61,
+      "colour recorded under the old columns reads as the preparation it was "
+      "labelled with — Agtron Commercial and Color Track were whole bean",
+      f"whole: commercial {float(_kept['agtron_commercial_whole']):.0f}, "
+      f"colortrack {float(_kept['colortrack_whole']):.0f}")
+check(float(_kept["agtron_gourmet_ground"]) == 70
+      and float(_kept["probat_colorette_ground"]) == 92,
+      "and Agtron Gourmet and Probat Colorette were ground, so nothing typed before "
+      "this change is lost or quietly moved")
+store.forget(["legacy-colour-roast"])
 
 check(abs(float(_after["weightLossPercent"]) - 13.75) < 0.01,
       "the out weight typed after the roast drives weight loss",
@@ -1187,16 +1215,21 @@ check(len(_prep) == 1 and list(_prep[0].options) == ["whole bean", "ground"]
       and _prep[0].value == "whole bean",
       "with one preparation shown at a time, whole bean first",
       f"{list(_prep[0].options)} · showing {_prep[0].value}")
-check(any("Agtron Commercial" in label for label in _fields)
-      and not any("Probat" in label for label in _fields),
-      "so the whole-bean meters are on the form and the ground ones are not",
-      ", ".join(label for label in _fields if "Agtron" in label or "Probat" in label))
+_meter_names = [name for _key, name, _span in _app.store.METERS]
+check(all(any(name in label for label in _fields) for name in _meter_names),
+      "so every meter is on the form, whichever preparation is showing",
+      ", ".join(label for label in _fields
+                if any(name in label for name in _meter_names)))
+
+_before_switch = [field.value for field in _entry.number_input
+                  if any(name in field.label for name in _meter_names)]
 _prep[0].set_value("ground").run()
 _ground = [field.label for field in _entry.number_input]
-check(any("Probat" in label for label in _ground)
-      and not any("Agtron Commercial" in label for label in _ground),
-      "and switching to ground swaps them over",
-      ", ".join(label for label in _ground if "Agtron" in label or "Probat" in label))
+check(all(any(name in label for label in _ground) for name in _meter_names),
+      "and the same four after switching to ground — the toggle changes which "
+      "readings you are filling in, not which meters exist",
+      ", ".join(label for label in _ground
+                if any(name in label for name in _meter_names)))
 
 _level = [box for box in _entry.selectbox if box.label == "Roast level"]
 check(len(_level) == 1 and "Full City" in list(_level[0].options)

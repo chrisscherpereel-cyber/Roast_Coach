@@ -59,29 +59,58 @@ NOTE_FIELDS = ["coffee", "origin", "process", "variety", "farm", "green_weight",
                # Read off whichever meter the roaster owns. Kept as four separate
                # numbers because the scales are not interchangeable and this app
                # will not invent a conversion between them.
+               # The old four, kept so nothing recorded under them is lost.
                "agtron_commercial", "agtron_gourmet", "probat_colorette", "colortrack",
-               "colortrack_ground", "colour_prepared_on"]
+               "colour_prepared_on"] + [
+               f"{meter}_{where}"
+               for meter in ("agtron_commercial", "agtron_gourmet",
+                             "probat_colorette", "colortrack")
+               for where in ("whole", "ground")]
 
-# The colour scales, with the preparation each is read on. A colour meter gives
-# a different number for the same roast whole and ground — ground reads lighter,
-# by a margin larger than most of the differences anybody is trying to see — so
-# the preparation is part of the reading, not a note beside it. The entry screen
-# shows one preparation at a time and keeps both.
-COLOUR_SCALES = (
-    ("agtron_commercial", "Agtron Commercial", "whole bean", (25, 95)),
-    ("colortrack", "Color Track", "whole bean", (0, 160)),
-    ("agtron_gourmet", "Agtron Gourmet (GRmt)", "ground", (25, 95)),
-    ("probat_colorette", "Probat Colorette", "ground", (30, 160)),
-    ("colortrack_ground", "Color Track", "ground", (0, 160)),
+# The colour meters a roaster might own. Every one of them reads either
+# preparation — the meter does not care what you put under it — so the same four
+# are offered whole and ground, and each pair of readings is kept separately.
+# They are not interchangeable and this app will never convert between them.
+METERS = (
+    ("agtron_commercial", "Agtron Commercial", (25, 95)),
+    ("agtron_gourmet", "Agtron Gourmet (GRmt)", (25, 95)),
+    ("probat_colorette", "Probat Colorette", (30, 160)),
+    ("colortrack", "Color Track", (0, 160)),
 )
 
 PREPARATIONS = ("whole bean", "ground")
 
 
+def colour_key(meter: str, preparation: str) -> str:
+    """Where one meter's reading of one preparation is kept."""
+    return f"{meter}_{'ground' if preparation == 'ground' else 'whole'}"
+
+
+# Every meter × every preparation, in the shape the rest of the app reads:
+# (column, meter name, preparation, typical range).
+COLOUR_SCALES = tuple(
+    (colour_key(key, preparation), name, preparation, span)
+    for preparation in PREPARATIONS
+    for key, name, span in METERS
+)
+
+
 def scales_for(preparation: str) -> tuple:
-    """The colour scales read on one preparation."""
+    """The four meters, as read on one preparation."""
     return tuple(item for item in COLOUR_SCALES if item[2] == preparation)
 
+
+# Colour used to be four columns with a preparation baked into each — Agtron
+# Commercial meant whole, Gourmet meant ground — which is how the meters are
+# usually *described* and not what they can actually read. Anything entered under
+# the old scheme is read as the preparation it was labelled with, so nothing
+# recorded before this is lost or silently moved.
+LEGACY_COLOUR = {
+    "agtron_commercial": "agtron_commercial_whole",
+    "colortrack": "colortrack_whole",
+    "agtron_gourmet": "agtron_gourmet_ground",
+    "probat_colorette": "probat_colorette_ground",
+}
 
 # How dark, in the words roasters actually use. Ordered light to dark, because
 # that is the only order in which the list means anything.
@@ -492,6 +521,14 @@ def load_roasts(path: str | None = None) -> pd.DataFrame:
     for column in NOTE_FIELDS:
         if column not in roasts:
             roasts[column] = np.nan
+
+    # Colour recorded before each meter had both preparations lands where it was
+    # meant: Agtron Commercial and Color Track were read whole, Agtron Gourmet
+    # and Probat Colorette ground. Filled in only where the new column is empty,
+    # so it never overwrites a reading somebody has since taken.
+    for was, now in LEGACY_COLOUR.items():
+        if was in roasts and now in roasts:
+            roasts[now] = roasts[now].fillna(roasts[was])
 
     numeric = ["dateTime", "ambient", "humidity", "weightGreen", "weightRoasted",
                "green_weight", "rating", "cupping_score"]
