@@ -792,14 +792,12 @@ def page_roasts():
     st.divider()
     st.markdown(f"### {selected['label']}")
 
-    # One roast, two things to do with it: read what happened, and write down
-    # what only you can know. They used to be two pages, which meant finding the
-    # same roast twice.
-    reading, writing = st.tabs(["What happened", "After the roast"])
-    with reading:
-        roast_detail(selected, frame, heading=False)
-    with writing:
-        after_the_roast(selected, frame)
+    # No tabs. The roast reads down one page: what happened, then what only you
+    # can know — and that second half is the same form as the **After the roast**
+    # screen, not a smaller version of it. Two forms asking overlapping questions
+    # is how a roast came to carry a roast level typed on one screen and a colour
+    # typed on another, with neither screen showing the whole of it.
+    roast_detail(selected, frame, heading=False)
 
 
 PHASE_SHORT = {"Charge": "charge", "Drying": "dry", "Maillard": "Maillard",
@@ -1194,73 +1192,9 @@ def roast_detail(row, frame, heading: bool = True):
             readout(row)
 
         st.markdown("#### About this roast")
-        with st.form(f"notes_{row['uid']}"):
-            bean_linked = text_of(row.get("bean_name"))
-            coffee = st.text_input(
-                "Coffee", value=text_of(row.get("coffee")),
-                help=("RoasTime links this roast to the bean "
-                      f"“{bean_linked}”, which is what it is compared against. "
-                      "Change the name here and every roast of that bean follows."
-                      if bean_linked else
-                      "No bean file matched this roast, so this name is what it is "
-                      "grouped and compared by."))
-            columns = st.columns(2)
-            origin = columns[0].text_input("Origin", value=text_of(row.get("origin")))
-            process = columns[1].text_input("Process", value=text_of(row.get("process")))
-            columns = st.columns(2)
-            variety = columns[0].text_input("Variety", value=text_of(row.get("variety")))
-            farm = columns[1].text_input("Farm or supplier", value=text_of(row.get("farm")))
-            columns = st.columns(2)
-            green = columns[0].number_input(
-                "Green weight (g)", value=float(row.get("greenWeight") or 0), step=10.0)
-            # One list of roast levels in the whole app. Two would let a roast
-            # saved on one screen be silently renamed by the other.
-            _levels = list(getattr(store, "ROAST_LEVELS", ()))
-            _now = text_of(row.get("roast_level"))
-            level = columns[1].selectbox(
-                "Roast level", ["", *_levels],
-                index=(_levels.index(_now) + 1) if _now in _levels else 0)
-            columns = st.columns(2)
-            rating = columns[0].slider("Rating", 0.0, 5.0,
-                                       float(row.get("rating") or 0), step=0.5)
-            score = columns[1].number_input("Cupping score", value=float(row.get("cupping_score") or 0),
-                                            step=0.25, min_value=0.0, max_value=100.0)
-            notes = st.text_area("Tasting notes and what you changed",
-                                 value=text_of(row.get("notes")), height=110)
-
-            st.markdown("**What the curve cannot see**")
-            st.caption("Measured roast colour carries more sensory weight than drop "
-                       "temperature does. Quakers are a green-coffee defect, recorded here "
-                       "so they are never blamed on the profile.")
-            columns = st.columns(2)
-            colour_whole = columns[0].number_input(
-                "Roast colour — whole bean", value=float(row.get("colour_whole") or 0),
-                step=1.0, help="Agtron, ColorTrack or whatever scale your meter uses.")
-            colour_ground = columns[1].number_input(
-                "Roast colour — ground", value=float(row.get("colour_ground") or 0), step=1.0)
-            columns = st.columns(2)
-            colour_sd = columns[0].number_input(
-                "Batch colour spread", value=float(row.get("colour_sd") or 0), step=0.1,
-                help="Standard deviation across individual beans, if you measure it.")
-            quakers = columns[1].number_input(
-                "Quakers picked out", value=float(row.get("quaker_count") or 0), step=1.0)
-            defects = st.text_input(
-                "Seen on the beans", value=text_of(row.get("visual_defects")),
-                placeholder="scorching · tipping · facing · charring · mottling",
-                help="Type what you saw. Scorching, tipping, facing and charring are "
-                     "recognised and explained back with their likely mechanism.")
-            if st.form_submit_button("Save", type="primary"):
-                store.save_notes(row["uid"], {
-                    "coffee": coffee.strip(), "origin": origin.strip(), "process": process.strip(),
-                    "variety": variety.strip(), "farm": farm.strip(),
-                    "green_weight": green or None, "roast_level": level or None,
-                    "rating": rating or None, "cupping_score": score or None, "notes": notes,
-                    "colour_whole": colour_whole or None, "colour_ground": colour_ground or None,
-                    "colour_sd": colour_sd or None, "quaker_count": quakers or None,
-                    "visual_defects": defects.strip()})
-                refresh()
-                st.toast("Saved.")
-                st.rerun()
+        st.caption("The same form as **After the roast** — one place where everything "
+                   "you know about a roast is entered, so no screen can show half of it.")
+        after_the_roast(row, frame, key="about", compact=True)
 
         if st.button("Use as the reference roast for this coffee", key=f"ref_{row['uid']}"):
             store.set_reference(row["uid"], row["coffee"])
@@ -1871,111 +1805,145 @@ def page_data():
                 st.rerun()
 
 
-def after_the_roast(row, frame):
-    """What only the roaster can know: colour, weights, defects, the cup.
+def after_the_roast(row, frame, key: str = "after", compact: bool = False):
+    """Everything about a roast that only the roaster can supply — one form.
 
-    This used to be a page of its own, which meant finding the roast twice —
-    once to look at it and again to write down what it tasted like. It belongs
-    on the roast, so it lives here, under the roast you already have open.
+    There used to be two of these: "About this roast" beside the curve, and the
+    after-the-roast screen. They asked for overlapping but different things, so a
+    roast could carry a roast level typed on one screen and a colour typed on the
+    other, and neither showed the whole of what was known. One form, in both
+    places, is the only arrangement in which what you see is what is stored.
+
+    ``compact`` lays it out for the narrow column beside the profile; the entry
+    screen gets the roomier version.
     """
     scales = getattr(store, "COLOUR_SCALES", ())
+    levels = list(getattr(store, "ROAST_LEVELS", ()))
+    wide = 2 if compact else 3
 
-
-    identity(row)
-    facts = st.columns(4)
-    facts[0].metric("Green in", number(row.get("greenWeight"), " g", 0))
-    facts[1].metric("Total", number(row.get("totalRoastMinutes"), " min"))
-    facts[2].metric("First crack", number(row.get("firstCrackTime"), " min"))
-    facts[3].metric("Drop IBTS", number(row.get("drumDropTemperature"), " °C", 0))
-
-    # The preparation is chosen outside the form, so the fields change the moment
-    # it is switched rather than on submit. Both preparations are kept: filling in
-    # ground does not clear whole bean, because they are two measurements of one
-    # roast and neither is a correction of the other.
+    # The preparation is chosen outside the form so the fields swap the moment it
+    # changes, rather than on submit.
     preparations = getattr(store, "PREPARATIONS", ("whole bean", "ground"))
+    stored_prep = text_of(row.get("colour_prepared_on"))
     prepared_on = st.radio(
         "Colour measured on", preparations, horizontal=True,
-        index=preparations.index(text_of(row.get("colour_prepared_on")))
-        if text_of(row.get("colour_prepared_on")) in preparations else 0,
-        key=f"prep_{row['uid']}",
-        help="A meter reads the same roast lighter ground than whole — by more than "
-             "most of the differences you are trying to see — so which one it was is "
-             "part of the reading. Both are kept; this only chooses what to fill in.")
+        index=preparations.index(stored_prep) if stored_prep in preparations else 0,
+        key=f"{key}_prep_{row['uid']}",
+        help="Which preparation you are entering readings for. Both are kept — "
+             "switching does not clear the other.")
 
-    # The same four meters either way — a meter reads whatever you put under it.
-    # The toggle chooses which pair of readings you are filling in, nothing else.
     shown_scales = (optional(store, "scales_for", prepared_on, default=None)
                     or [item for item in scales if item[2] == prepared_on] or scales)
 
-    with st.form(f'after_{row["uid"]}'):
-        st.markdown(f"**Roast colour, read on {prepared_on}** — whichever meter you "
-                    "have. Each scale is stored as you read it; the app never converts "
-                    "between them, because they do not convert cleanly.")
-        columns = st.columns(len(shown_scales) or 1)
-        entered = {}
-        for column, (key, name, where, (low, high)) in zip(columns, shown_scales):
-            entered[key] = column.number_input(
-                name, value=float(row.get(key) or 0), step=1.0, min_value=0.0,
-                max_value=float(high) + 100, help=f"Read on the {where}. Typical range "
-                                                  f"{low:.0f}–{high:.0f}.")
+    with st.form(f'{key}_{row["uid"]}'):
+        st.markdown("**The coffee**")
+        linked = text_of(row.get("bean_name"))
+        coffee = st.text_input(
+            "Coffee", value=text_of(row.get("coffee")), key=f"{key}_coffee_{row['uid']}",
+            help=(f"RoasTime links this roast to the bean “{linked}”, which is what it "
+                  "is compared against. Change the name here and every roast of that "
+                  "bean follows." if linked else
+                  "No bean file matched this roast, so this name is what it is grouped "
+                  "and compared by."))
+        columns = st.columns(2)
+        origin = columns[0].text_input("Origin", value=text_of(row.get("origin")),
+                                       key=f"{key}_origin_{row['uid']}")
+        process = columns[1].text_input("Process", value=text_of(row.get("process")),
+                                        key=f"{key}_process_{row['uid']}")
+        columns = st.columns(2)
+        variety = columns[0].text_input("Variety", value=text_of(row.get("variety")),
+                                        key=f"{key}_variety_{row['uid']}")
+        farm = columns[1].text_input("Farm or supplier", value=text_of(row.get("farm")),
+                                     key=f"{key}_farm_{row['uid']}")
 
-        # What is already recorded on the other preparation, so switching away
-        # from a filled-in reading never looks like losing it.
+        st.markdown("**Weights**")
+        columns = st.columns(2)
+        green = columns[0].number_input(
+            "Green in (g)", value=float(row.get("greenWeight") or 0), step=10.0,
+            key=f"{key}_green_{row['uid']}")
+        out_weight = columns[1].number_input(
+            "Weight out (g)", value=float(row.get("weightRoasted") or 0), step=1.0,
+            key=f"{key}_out_{row['uid']}")
+
+        st.markdown(f"**Roast colour, read on {prepared_on}**")
+        st.caption("Whichever meter you have. Every scale is stored exactly as you read "
+                   "it — the app never converts between them, because they do not "
+                   "convert cleanly.")
+        entered = {}
+        for column, (scale, name, where, (low, high)) in zip(
+                st.columns(min(len(shown_scales), wide) or 1) * 4, shown_scales):
+            entered[scale] = column.number_input(
+                name, value=float(row.get(scale) or 0), step=1.0, min_value=0.0,
+                max_value=float(high) + 100, key=f"{key}_{scale}_{row['uid']}",
+                help=f"Typical range {low:.0f}–{high:.0f} on {where}.")
+
         elsewhere = [item for item in scales if item[2] != prepared_on
                      and pd.notna(row.get(item[0])) and row.get(item[0])]
         if elsewhere:
             st.caption(f"Already recorded on {elsewhere[0][2]}: "
-                       + " · ".join(f"{name} {float(row.get(key)):.0f}"
-                                    for key, name, _where, _range in elsewhere))
+                       + " · ".join(f"{name} {float(row.get(scale)):.0f}"
+                                    for scale, name, _where, _range in elsewhere))
 
-        levels = getattr(store, "ROAST_LEVELS", ())
         current = text_of(row.get("roast_level"))
-        level = st.selectbox(
-            "Roast level", ["—", *levels],
-            index=(list(levels).index(current) + 1) if current in levels else 0,
-            help="The traditional names, light to dark. What the colour meter reads is "
-                 "the measurement; this is what you would call it.")
+        columns = st.columns(2)
+        level = columns[0].selectbox(
+            "Roast level", ["—", *levels], key=f"{key}_level_{row['uid']}",
+            index=(levels.index(current) + 1) if current in levels else 0,
+            help="The traditional names, light to dark. The meter gives the "
+                 "measurement; this is what you would call it.")
+        spread = columns[1].number_input(
+            "Batch colour spread (SD)", value=float(row.get("colour_sd") or 0), step=0.1,
+            key=f"{key}_sd_{row['uid']}",
+            help="Standard deviation across individual beans, if you measure it.")
 
-        columns = st.columns(3)
-        spread = columns[0].number_input("Batch colour spread (SD)",
-                                         value=float(row.get("colour_sd") or 0), step=0.1)
-        out_weight = columns[1].number_input("Weight out (g)",
-                                             value=float(row.get("weightRoasted") or 0),
-                                             step=1.0)
-        quakers = columns[2].number_input("Quakers picked out",
-                                          value=float(row.get("quaker_count") or 0), step=1.0)
-
-        defects = st.text_input(
-            "What the beans looked like", value=text_of(row.get("visual_defects")),
+        st.markdown("**What the beans looked like**")
+        columns = st.columns(2)
+        quakers = columns[0].number_input(
+            "Quakers picked out", value=float(row.get("quaker_count") or 0), step=1.0,
+            key=f"{key}_quakers_{row['uid']}",
+            help="A green-coffee defect, recorded here so it is never blamed on the "
+                 "profile.")
+        defects = columns[1].text_input(
+            "Seen on the beans", value=text_of(row.get("visual_defects")),
+            key=f"{key}_defects_{row['uid']}",
             placeholder="scorching · tipping · facing · charring · mottling · even")
+
+        st.markdown("**The cup**")
+        columns = st.columns(2)
+        rating = columns[0].slider("Rating", 0.0, 5.0, float(row.get("rating") or 0),
+                                   step=0.5, key=f"{key}_rating_{row['uid']}")
+        score = columns[1].number_input(
+            "Cupping score", value=float(row.get("cupping_score") or 0), step=0.25,
+            min_value=0.0, max_value=100.0, key=f"{key}_score_{row['uid']}")
+        notes = st.text_area("Tasting notes and what you changed",
+                             value=text_of(row.get("notes")), height=110,
+                             key=f"{key}_notes_{row['uid']}")
 
         # RoasTime records a user id, not a name, so this arrives as a number or
         # not at all. One roastery is usually one roaster: default to them, and
         # let it be changed on the roast that somebody else ran.
         roasted_by = st.text_input(
             "Roasted by", value=text_of(row.get("roasted_by")) or DEFAULT_ROASTER,
+            key=f"{key}_by_{row['uid']}",
             help="Defaults to whoever normally roasts here. Change it for a roast "
                  "somebody else ran, and it stays changed.")
 
-        columns = st.columns(2)
-        rating = columns[0].slider("Rating", 0.0, 5.0, float(row.get("rating") or 0), step=0.5)
-        score = columns[1].number_input("Cupping score",
-                                        value=float(row.get("cupping_score") or 0),
-                                        step=0.25, min_value=0.0, max_value=100.0)
-        notes = st.text_area("Tasting notes", value=text_of(row.get("notes")), height=110)
-
-        if st.form_submit_button("Save and next", type="primary", use_container_width=True):
-            values = {key: (value or None) for key, value in entered.items()}
-            values.update({"colour_sd": spread or None, "quaker_count": quakers or None,
-                           "visual_defects": defects.strip(), "rating": rating or None,
-                           "cupping_score": score or None, "notes": notes})
-            values["roasted_weight"] = out_weight or None
-            values["roasted_by"] = roasted_by.strip() or None
-            values["roast_level"] = None if level == "—" else level
-            # Which preparation these numbers were read on. Only the scales for
-            # that preparation are in `values`, so the other one is left exactly
-            # as it was rather than blanked.
-            values["colour_prepared_on"] = prepared_on
+        if st.form_submit_button("Save", type="primary", use_container_width=True):
+            # Only the scales for the chosen preparation are in `entered`, so the
+            # other preparation's readings are left exactly as they were.
+            values = {scale: (value or None) for scale, value in entered.items()}
+            values.update({
+                "coffee": coffee.strip(), "origin": origin.strip(),
+                "process": process.strip(), "variety": variety.strip(),
+                "farm": farm.strip(), "green_weight": green or None,
+                "roasted_weight": out_weight or None,
+                "roast_level": None if level == "—" else level,
+                "colour_sd": spread or None, "quaker_count": quakers or None,
+                "visual_defects": defects.strip(), "rating": rating or None,
+                "cupping_score": score or None, "notes": notes,
+                "roasted_by": roasted_by.strip() or None,
+                "colour_prepared_on": prepared_on,
+            })
             store.save_notes(row["uid"], values)
             refresh()
             st.toast("Saved.")

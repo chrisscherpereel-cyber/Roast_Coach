@@ -1193,9 +1193,14 @@ _one.session_state[auth.SESSION_KEY] = "tester"
 _one.run()
 check(not _one.exception, "the Roasts page opens",
       str(_one.exception[0].message)[:160] if _one.exception else "")
-check(any("After the roast" in str(getattr(tab, "label", "")) for tab in _one.tabs),
-      "and carries the after-the-roast entry on the roast itself",
-      ", ".join(str(getattr(tab, "label", "")) for tab in _one.tabs))
+_on_roast = [field.label for field in _one.number_input] + \
+            [field.label for field in _one.text_input]
+check(any("Cupping score" in label for label in _on_roast)
+      and any("Agtron" in label for label in _on_roast)
+      and any("Coffee" == label for label in _on_roast),
+      "and the roast itself carries the whole entry form — the same one the "
+      "After the roast screen shows, not a different subset of it",
+      ", ".join(label for label in _on_roast[:6]))
 os.environ["ROAST_COACH_PAGE"] = "After the roast"
 _entry = AppTest.from_file("app.py", default_timeout=300)
 _entry.session_state[auth.SESSION_KEY] = "tester"
@@ -1209,6 +1214,32 @@ check(any("Agtron" in label for label in _fields),
       "with the colour scales on it", ", ".join(_fields[:4]))
 check("Roasted by" in _fields,
       "and who roasted it, which RoasTime records as a user id and no name at all")
+
+# The two screens that take what a roaster knows must ask for the same things.
+# They did not, once: a roast could carry a roast level typed on one and a colour
+# typed on the other, and neither screen showed the whole of it.
+def _fields_on(page_name):
+    os.environ["ROAST_COACH_PAGE"] = page_name
+    opened = AppTest.from_file("app.py", default_timeout=300)
+    opened.session_state[auth.SESSION_KEY] = "tester"
+    opened.run()
+    return ({field.label for field in opened.number_input}
+            | {field.label for field in opened.text_input}
+            | {field.label for field in opened.text_area}
+            | {field.label for field in opened.selectbox}
+            | {field.label for field in opened.slider}
+            | {field.label for field in opened.radio}), opened
+
+_on_entry, _ = _fields_on("After the roast")
+_on_roast_page, _ = _fields_on("Roasts")
+# "Roast" is the entry screen's own picker — which roast to fill in — not a
+# field of the form. The Roasts page picks by clicking a row instead.
+_missing = _on_entry - _on_roast_page - {"Roast"}
+check(not _missing,
+      "the roast page asks for everything the after-the-roast screen does — one form, "
+      "used twice, so neither can show half of what is stored",
+      "missing: " + ", ".join(sorted(_missing)) if _missing else "same fields on both")
+os.environ["ROAST_COACH_PAGE"] = "After the roast"
 
 _prep = [box for box in _entry.radio if box.label == "Colour measured on"]
 check(len(_prep) == 1 and list(_prep[0].options) == ["whole bean", "ground"]
