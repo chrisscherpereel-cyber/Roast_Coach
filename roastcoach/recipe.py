@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-VERSION = 2
+VERSION = 3
 
 CONTROLS = ("power", "fan", "drum")
 
@@ -150,7 +150,10 @@ def timeline(curve: pd.DataFrame, row=None) -> pd.DataFrame:
 
 
 def temperatures_at(curve: pd.DataFrame, minutes: float) -> tuple:
-    """Bean and drum temperature at a moment, read from the curve itself.
+    """Both probes at a moment, read from the curve itself.
+
+    The pair is (bean probe, IBTS) — RoasTime stores the IBTS in a field called
+    `drumTemperature`, which is not the drum.
 
     Not from the nearest control change: a move made at 1:12 is not at the
     charge temperature, and saying so would send somebody to the wrong place in
@@ -188,7 +191,7 @@ def settings_at(moves: pd.DataFrame, minutes: float) -> dict:
 
 
 def move(control: str, at_minutes: float, current, steps: float, why: str = "",
-         bean_temp=None, drum_temp=None) -> dict | None:
+         bean_temp=None, drum_temp=None, ibts_temp=None) -> dict | None:
     """One change the roaster can actually make: a whole step, on one control, at a time.
 
     Anything under half a step is no change at all and is dropped rather than
@@ -222,17 +225,35 @@ def move(control: str, at_minutes: float, current, steps: float, why: str = "",
         return round(value, 1) if np.isfinite(value) else None
 
     return {"control": control, "at": float(at_minutes), "clock": clock(at_minutes),
-            "bt": _temp(bean_temp), "ibts": _temp(drum_temp),
+            "bt": _temp(bean_temp),
+            # `drum_temp` is the old name for this argument. RoasTime stores the
+            # IBTS reading in a field called `drumTemperature`, which is how the
+            # infrared sensor came to be called the drum probe all through this
+            # app. It is not the drum: it is the bean surface, and it is what the
+            # recipes are written against.
+            "ibts": _temp(ibts_temp if ibts_temp is not None else drum_temp),
             "from": current if np.isfinite(current) else None,
             "to": target if np.isfinite(target) else None,
             "step": whole, "why": why}
 
 
 def when(change: dict) -> str:
-    """When to make a change, said both ways: on the clock and at a temperature."""
+    """When to make a change — the IBTS temperature first, the clock after.
+
+    A Bullet recipe is written against the IBTS, and that is what the roaster is
+    watching while the drum turns: "power 6 at 192 °C" is an instruction that can
+    be followed, where "power 6 at 6:20" is a stopwatch race against a roast that
+    may be running early or late. The time still matters — it is how you know the
+    roast is on pace — so it is kept, one step back.
+    """
     at = change.get("clock", "—")
-    temperature = change.get("bt")
-    return f"{at} · {float(temperature):.0f} °C BT" if temperature is not None else at
+    ibts = change.get("ibts")
+    bean = change.get("bt")
+    if ibts is not None:
+        return f"{float(ibts):.0f} °C IBTS · {at}"
+    if bean is not None:
+        return f"{float(bean):.0f} °C bean probe · {at}"
+    return at
 
 
 def describe(change: dict) -> str:

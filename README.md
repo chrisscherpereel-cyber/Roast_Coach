@@ -190,85 +190,49 @@ than with instructions for finding the right page. Where the fix is genuinely yo
 
 ---
 
-## The seven pages, in the order a roast lives through them
+## The four pages, in the order a roast lives through them
 
 **Coach** — what to change on your next roast, as **the next roast written out step by
-step**: every setting, the minute to make it, and what it was last time where it differs.
-Advice is always one control, one moment, one whole step — *at 4:49 · 151 °C BT, power
-8 → 9*, said both on the clock and at the temperature — because
-power, fan and drum move in steps of one and nobody sets an average. Where a control is
-already at the end of its range the advice moves to the other lever and says why. Underneath,
-each change carries the reason it was suggested, its prediction, and what became of it.
+step**: what to set at charge, and every change after it *at the IBTS temperature where it
+belongs*, with the clock time beside it. The Bullet's recipes are written against the IBTS
+and that is the number on screen while the drum turns, so it leads; the time tells you
+whether the roast is on pace.
 
-**Roasts** — one roast in full: the curve, **the recipe you actually ran** — every move with
-the time *and* the bean and drum temperature it was made at, since a Bullet recipe is written
-in temperature while the roast is watched on a clock — with charge, yellowing, first crack
-and drop in the same list, then the findings, then everything you have written about it.
+**Roasts** — every roast by date and coffee, with three names kept apart (roast name, bean,
+recipe). Open one and it has two tabs: **What happened** — the profile, the readout, the
+recipe as written against what you actually ran, and what the roast did — and **After the
+roast**, where colour, weights, defects, rating and tasting notes are entered. Those were
+two pages until they were not: reading a roast and writing down how it tasted are the same
+roast, and finding it twice was silly.
 
-**After the roast** — everything RoasTime cannot know, on one screen, with a queue of the
-roasts still missing it: **Agtron Commercial, Agtron Gourmet (GRmt), Probat Colorette and
-Color Track** — each stored in the units you read it in, because the scales do not convert
-cleanly and this app will not pretend they do — plus batch colour spread, weight out,
-quakers, what the beans looked like, the rating, the score, the notes, and a verdict against
-every cup risk the roast raised.
+**Compare** — two things, in that order. **Particular roasts you pick**, overlaid on one
+pair of axes (IBTS and its rate of rise), optionally lined up at first crack so development
+compares like with like. And **groups**: bean × recipe, bean × batch size, recipe × month —
+every measure worked out inside each group, with the spread, which is usually the more
+interesting number. At the foot of it, what the coach has learned from all your roasts: how
+far each control actually moves each measure on your machine, and which of its own rules
+have earned their place.
 
-**Compare** — group by **bean, batch size, recipe, roast level, machine, roaster, month,
-origin or process**, singly or in any combination, with filters to narrow first. Every
-measure is worked out inside each group, including the spread within it, and any one group
-opens into its trend, its repeatability and every roast in it drawn on top of the others.
+**Setup** — two tabs, neither of them in the way: **Data and sync** (where the roasts are
+kept, what arrived from RoasTime, what is behind and the button that fixes it) and **How it
+decides** (the three levels of a finding, the evidence grades, and every source).
 
-**Learning** — what the app has measured from your roasting, against what it assumed before
-it had your data, and how often each kind of advice has worked.
+### Three roasts overlaid, and not four
 
-**Data** — folder upload, where the roasts are stored, **what RoasTime knows against what
-actually arrived** (beans, recipes, machines and roasters, each with how many files came in
-and how many roasts matched), **every field in your stored roasts and what the app does with
-each one**, who is signed in, the demo, and what to delete.
+Overlaid curves cross, so every pair of colours is adjacent somewhere on the chart. Three
+hues clear the colour-blind separation floors on that test in both light and dark themes; no
+fourth one tried does. So the overlay holds three — each also dash-patterned and named at
+the end of its line — and a fourth roast gets its own panel on the same axes instead, with
+the first roast you picked drawn faintly behind each of the others. That is a real
+comparison rather than a knot of lines.
 
-**Method** — what the app is willing to say and how sure it is: the three levels, the
-evidence grades, every threshold with its value and why it is that way, the sources, and the
-record of which warnings have actually been borne out at the cupping table.
+### The two probes, named for what they are
 
-## How the coaching works
-
-### It looks for things worth saying
-
-Eight rules run over each roast: development too short or too long, a rate-of-rise crash
-after first crack, a flick, a stall before first crack, drying that ran fast or dragged, a
-late turning point, drift from your reference roast for that coffee, and weight loss
-outside the band. A roast that lands inside every target draws no advice at all.
-
-### It says how far, not just which way
-
-Textbook advice says *add power*. Roast Coach says *power up 1.5 steps through Maillard*,
-because it has measured what a power step does to the rate of rise on your machine, with
-your batch sizes.
-
-That measurement comes from your own roasts. Take two roasts of the same coffee in a row:
-the difference in a control setting during one phase, against the difference in the
-measure that control drives, is one observation of the effect size. The median across many
-pairs is the estimate — the median, so one strange roast cannot drag it around. Every
-estimate starts at a textbook value and moves toward yours as pairs accumulate:
-
-```
-slope = (3 × textbook + n × measured) / (3 + n)
-```
-
-so the first suggestion is never built on a single roast, and after twenty pairs the
-textbook value has all but disappeared. The Learning page shows both numbers side by side.
-
-### It grades itself
-
-Mark a suggestion **I'll try this**, roast that coffee again, and the app compares what it
-predicted against what happened:
-
-- **worked** — the measure reached the predicted value, or moved past it
-- **partly worked** — it moved the right way but fell short
-- **did not work** — it did not move, or moved the wrong way
-
-Those outcomes feed back twice. The effect sizes are re-measured with the new roast
-included, and each rule keeps a hit rate that lowers the confidence shown on its future
-suggestions. Advice that keeps missing on your machine gets quieter.
+The Bullet has an **IBTS** — an infrared sensor reading the bean mass — and a **bean
+probe** buried in the beans. RoasTime stores the IBTS in a field called `drumTemperature`,
+which invites exactly the wrong reading, and this app used to repeat it. The IBTS is not the
+drum: it is what the recipes are written against and what the roaster watches, so it is
+named IBTS everywhere it appears, and the physical probe is called the bean probe.
 
 ---
 
@@ -396,7 +360,7 @@ within 0.13 °C/min.
 ## Layout
 
 ```
-app.py                      the seven pages
+app.py                      the four pages
 roastcoach/
   store.py                  the database: roasts, curves, notes, advice, outcomes
   coach.py                  the rules, the predictions, the grading

@@ -179,6 +179,15 @@ try:
     behind = store.unread()
 except Exception:
     behind = 0
+settled = 0
+try:
+    settled = store.sealed()
+except Exception:
+    settled = 0
+if settled:
+    st.caption(f"{settled} roast(s) have no file on this Mac any more. They keep "
+               "everything they already had, and are not asked about again.")
+
 if behind and not again:
     st.info(f"**{behind} roast(s)** were read by an earlier version of this app, which "
             "kept fewer of RoasTime's fields — the link to the recipe among them. "
@@ -272,10 +281,82 @@ if total:
             st.caption(f"Could not read the roasts: {problem}")
 
 # ---------------------------------------------------------------------------
+# Checking it, rather than being told it is fine
+# ---------------------------------------------------------------------------
+
+st.markdown("### 5 · Check every roast, one by one")
+st.caption("Reads each roast file here and asks what the database made of it: is the "
+           "roast there, does the file name a bean and a recipe, and did those end up "
+           "on screen. Anything that failed is listed by name. On five hundred roasts "
+           "this takes a minute or two.")
+
+if st.button("Check everything", use_container_width=True):
+    bar = st.progress(0.0, text="Reading…")
+    try:
+        found = sync.audit(
+            folder,
+            progress=lambda position, total: bar.progress(
+                position / max(total, 1), text=f"Reading… {position} of {total}"))
+    except Exception as problem:
+        found = None
+        st.error(f"{type(problem).__name__}: {problem}", icon=":material/error:")
+    bar.empty()
+
+    if found:
+        st.session_state["audit"] = found
+
+found = st.session_state.get("audit")
+if found:
+    tally = st.columns(3)
+    tally[0].metric("Roast files here", f"{found['files']:,}")
+    tally[1].metric("In the database", f"{found['in_database']:,}")
+    tally[2].metric("Recipe showing", f"{found['recipe_shown']:,}")
+
+    st.markdown(
+        f"- **{found['in_database']}** of {found['files']} roast files are in the "
+        f"database" + (f" · **{found['missing']} are not**" if found["missing"] else "")
+        + f"\n- **{found['recipe_on_file']}** files carry a recipe id · "
+          f"**{found['recipe_stored']}** of those recipes are stored · "
+          f"**{found['recipe_shown']}** show a recipe in the app"
+        + f"\n- **{found['bean_on_file']}** files carry a bean id · "
+          f"**{found['bean_shown']}** show a bean in the app")
+
+    if found.get("spellings"):
+        st.caption("What these files call the recipe link: "
+                   + " · ".join(f"`{key}` ×{count}"
+                                for key, count in sorted(found["spellings"].items())))
+
+    if found["recipe_shown"] == found["recipe_on_file"] and not found["missing"]:
+        st.success("Every roast that names a recipe is showing one, and every file "
+                   "here is in the database.", icon=":material/check_circle:")
+
+    for label, key, why in (
+        ("not in the database", "not_in_database",
+         "These files were not imported. Press **Sync now** above."),
+        ("point at a recipe whose file is not here", "recipe_not_stored",
+         "The recipe was deleted in RoasTime, or lives only in your Roast.World "
+         "account. Nothing on this Mac can supply it."),
+        ("have a stored recipe that is not showing", "recipe_not_shown",
+         "This is the app's fault, not your data's — worth reporting with the names "
+         "below."),
+        ("carry no recipe id at all", "no_recipe_id",
+         "RoasTime may still show a recipe for these from its own database. The roast "
+         "file itself does not record one, so nothing reading the files can know it."),
+    ):
+        items = found.get(key) or []
+        if not items:
+            continue
+        with st.expander(f"{len(items)} roast(s) {label}"):
+            st.caption(why)
+            st.code("\n".join(items[:60])
+                    + (f"\n…and {len(items) - 60} more" if len(items) > 60 else ""),
+                    language=None)
+
+# ---------------------------------------------------------------------------
 # Doing it without being asked
 # ---------------------------------------------------------------------------
 
-st.markdown("### 5 · Have macOS do it for you")
+st.markdown("### 6 · Have macOS do it for you")
 
 installed = sync.AGENT.exists()
 if installed:

@@ -308,7 +308,12 @@ STEP_CONTROLS = {"power": ("power", "p", "heat", "burner"),
 # (`actions`, each its own number). These are those numbers, read off this
 # roaster's own seventy recipes — 442 temperature triggers, 470 time triggers,
 # and every action code that appears in any of them.
-TRIGGERS = {0: "bean temperature", 1: "drum temperature", 2: "temperature", 3: "time"}
+# The Bullet has two probes and RoasTime's field names invite exactly the wrong
+# reading of them. `drumTemperature` is the **IBTS** — an infrared sensor looking
+# at the bean mass — and `beanTemperature` is the physical probe buried in it.
+# Recipes are written against the IBTS, and it is the line the roaster watches,
+# so it is named for what it is everywhere the roaster can see it.
+TRIGGERS = {0: "IBTS", 1: "bean probe", 2: "temperature", 3: "time"}
 ACTIONS = {0: "power", 1: "drum", 2: "fan", 3: "note", 4: "alert"}
 
 

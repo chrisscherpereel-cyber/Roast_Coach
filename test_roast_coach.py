@@ -295,9 +295,11 @@ check(_real_steps[0] == {"at": "charge", "power": "8", "fan": "2", "drum": "9"},
       "RoasTime's own recipe opens at charge with power, fan and drum",
       str(_real_steps[0]))
 check(any(step.get("temperature") == 176 and step.get("power") == "7"
-          and step.get("fan") == "3" and step.get("watching") == "bean temperature"
+          and step.get("fan") == "3" and step.get("watching") == "IBTS"
           for step in _real_steps),
-      "and each step reads as what it is: at 176 °C bean, power 7 and fan 3",
+      "and each step reads as what it is: at 176 °C on the IBTS — the infrared "
+      "sensor the recipes are written against, which RoasTime confusingly files "
+      "under `drumTemperature` — power 7 and fan 3",
       str(_real_steps[1]))
 check(_real_steps[-1].get("at") == "drop"
       and _real_steps[-1].get("alert") == "End Roast Alert",
@@ -614,13 +616,21 @@ check(all(np.isfinite(value) for key, value in _at_crack.items() if key != "drum
       f"at first crack: power {_at_crack['power']:.0f}, fan {_at_crack['fan']:.0f}")
 
 # Advice is a whole step on one control at one time — never an average.
-_change = recipe.move("power", 4.5, 8, 1.4, "more momentum", bean_temp=165.4)
+_change = recipe.move("power", 4.5, 8, 1.4, "more momentum", bean_temp=165.4,
+                      ibts_temp=192.0)
 check(_change and _change["from"] == 8 and _change["to"] == 9 and _change["step"] == 1,
       "1.4 steps of advice becomes one whole step the machine can take",
       recipe.describe(_change))
-check("165 °C BT" in recipe.describe(_change),
-      "and it is said both ways — on the clock and at a temperature",
-      recipe.describe(_change))
+# The IBTS leads. That is the number on the screen while the drum turns, and the
+# one a Bullet recipe is written against; the clock says whether the roast is on
+# pace, which is worth knowing and is not the instruction.
+check(recipe.when(_change).startswith("192 °C IBTS")
+      and "4:30" in recipe.when(_change),
+      "and it is said IBTS first, clock second — the order the roaster works in",
+      recipe.when(_change))
+check(recipe.when({"clock": "4:30", "bt": 165.4}).startswith("165 °C bean probe"),
+      "with the bean probe named as the bean probe when that is all there is",
+      recipe.when({"clock": "4:30", "bt": 165.4}))
 check({"bt", "ibts"} <= set(_moves.columns)
       and _moves["bt"].notna().any(),
       "the recipe timeline carries the temperature each move was made at",
@@ -980,6 +990,18 @@ _after = {metric.label: metric.value for metric in _sync_page.metric}
 check(int(_after.get("Beans", "0").replace(",", "")) >= 1,
       "the bean files go with them — a roast with no bean shows an empty Bean column, "
       "which is what this page exists to make impossible to miss", str(_after))
+# "Is all of it actually syncing?" deserves an answer with numbers, not a
+# reassurance — so the page counts every file against what the database made of it.
+_checked = [button for button in _sync_page.button if button.label == "Check everything"]
+check(len(_checked) == 1, "the page can check every roast one by one")
+_checked[0].click().run()
+check(not _sync_page.exception, "the check runs",
+      str(_sync_page.exception[0].message)[:200] if _sync_page.exception else "")
+check(any("Every roast that names a recipe is showing one" in message.value
+          for message in _sync_page.success),
+      "and says so plainly when everything did arrive",
+      " / ".join(message.value[:60] for message in _sync_page.success))
+
 _landed = store.load_roasts()
 _mine = _landed[_landed["uid"].str.startswith("mac-page")]
 check(len(_mine) == 2 and set(_mine["bean"]) == {"Kenya Makwa AA"},
@@ -987,6 +1009,74 @@ check(len(_mine) == 2 and set(_mine["bean"]) == {"Kenya Makwa AA"},
       " / ".join(sorted(set(_mine["bean"]))))
 store.forget(["mac-page-0", "mac-page-1"])
 _shutil.rmtree(_mac_root, ignore_errors=True)
+
+
+print("\nFOUR PAGES, AND ROASTS SIDE BY SIDE")
+from roastcoach import charts as _charts  # noqa: E402
+from roastcoach.curves import create_roast_samples as _samples_of  # noqa: E402
+
+_compare_rows = demo_data.history(weeks=8, seed=321)[:5]
+for _position, _roast in enumerate(_compare_rows):
+    _roast["uid"] = _roast["guid"] = f"side-{_position}"
+store.add_roasts(demo_data.as_files(_compare_rows))
+_side_frame = store.load_roasts().set_index("uid")
+_picked = [{"label": f"roast {n}",
+            "curve": _samples_of(store.roast_dict(f"side-{n}"), drop_factor=2),
+            "first_crack": _side_frame.loc[f"side-{n}", "firstCrackTime"],
+            "drop": _side_frame.loc[f"side-{n}", "totalRoastMinutes"]}
+           for n in range(5)]
+
+check(_charts.OVERLAY_LIMIT == 3,
+      "three roasts overlay at once, and not more — past three no colour set stays "
+      "separable for a colour-blind reader in both themes, and the answer to that is "
+      "a panel each, not a fourth hue nobody can name", str(_charts.OVERLAY_LIMIT))
+check(len(set(_charts.series_colors("light"))) == 3
+      and len(set(_charts.series_colors("dark"))) == 3,
+      "each theme has its own three, chosen for its own surface")
+
+_overlay = _charts.compare_figure(_picked[:3], "light")
+check(len(_overlay.data) >= 6, "an overlay draws temperature and rate of rise for each",
+      f"{len(_overlay.data)} traces")
+check({trace.line.color for trace in _overlay.data if trace.mode == "lines"}
+      == set(_charts.series_colors("light")),
+      "one colour per roast, held across both panels")
+check({trace.line.dash for trace in _overlay.data if trace.mode == "lines"} ==
+      {"solid", "dash", "dot"},
+      "and a dash pattern as well, so identity never rests on colour alone")
+
+_aligned = _charts.compare_figure(_picked[:2], "light", align="first crack")
+_zero = [trace for trace in _aligned.data if trace.mode == "lines"][0]
+check(min(_zero.x) < 0, "aligning at first crack puts the run-up before zero",
+      f"starts at {min(_zero.x):.1f} min")
+
+_many = _charts.small_multiples_figure(_picked, "light")
+check(len(_many.data) >= 5 and _many.layout.height >= 5 * 150,
+      "five roasts get five panels on the same axes instead of five tangled lines",
+      f"{len(_many.data)} traces, {_many.layout.height}px")
+
+os.environ["ROAST_COACH_PAGE"] = "Compare"
+_compare = AppTest.from_file("app.py", default_timeout=300)
+_compare.session_state[auth.SESSION_KEY] = "tester"
+_compare.run()
+check(not _compare.exception, "the Compare page opens",
+      str(_compare.exception[0].message)[:160] if _compare.exception else "")
+check(any(box.label == "Roasts to compare" for box in _compare.multiselect),
+      "and offers particular roasts to put on top of one another",
+      ", ".join(box.label for box in _compare.multiselect))
+check(any("learned" in item.value.lower() for item in _compare.markdown),
+      "with what the coach has learned at the foot of it, rather than on a page of its own")
+
+os.environ["ROAST_COACH_PAGE"] = "Roasts"
+_one = AppTest.from_file("app.py", default_timeout=300)
+_one.session_state[auth.SESSION_KEY] = "tester"
+_one.run()
+check(not _one.exception, "the Roasts page opens",
+      str(_one.exception[0].message)[:160] if _one.exception else "")
+check(any("After the roast" in str(getattr(tab, "label", "")) for tab in _one.tabs),
+      "and carries the after-the-roast entry on the roast itself",
+      ", ".join(str(getattr(tab, "label", "")) for tab in _one.tabs))
+os.environ.pop("ROAST_COACH_PAGE", None)
+store.forget([f"side-{n}" for n in range(5)])
 
 
 print("\nROASTS READ BY AN OLDER IMPORTER")
@@ -1030,6 +1120,35 @@ check(store.unread() < _before_unread,
 _recovered = store.load_roasts().set_index("uid").loc["late-roast"]
 check(_recovered["recipe_name"] == "Zambia 800 Light-Medium",
       "which is what finally brings the recipe name across", str(_recovered["recipe_name"]))
+check(store.unread() == 0, "with nothing left outstanding once its file is read")
+
+# And the case that had a warning standing that nobody could act on: a roast read
+# by an older importer whose file RoasTime no longer keeps. It cannot be read
+# again by anyone, so it must stop counting as work — while keeping everything it
+# already had.
+_gone = demo_data.history(weeks=2, seed=1919)[:1]
+_gone[0]["uid"] = _gone[0]["guid"] = "gone-roast"
+_gone[0]["roastName"] = "Zambia, file since deleted"
+store.add_roasts(demo_data.as_files(_gone))
+_row = _json.loads(db.one("SELECT data FROM roasts WHERE uid = :u",
+                          {"u": "gone-roast"})[0])
+_row["import_version"] = 1
+db.run("UPDATE roasts SET data = :d WHERE uid = :u",
+       {"d": _json.dumps(_row), "u": "gone-roast"})
+check(store.unread() >= 1, "a roast whose file is gone starts out counted as unread")
+
+# A sync of a folder that does not contain it — which is what the roaster's Mac
+# does every time, for the roasts RoasTime has since deleted.
+_sync.sync_once(Path(_old_root) / "roasts", None, again=True)
+check(store.unread() == 0,
+      "after a full re-read it stops being counted: there is no file to read, so a "
+      "warning about it could never be acted on", str(store.unread()))
+check(store.sealed() >= 1, "it is recorded as settled instead", str(store.sealed()))
+_kept = store.load_roasts().set_index("uid").loc["gone-roast"]
+check(_kept["roast_name"] == "Zambia, file since deleted"
+      and float(_kept.get("totalRoastMinutes") or 0) > 0,
+      "and keeps its curve, its measurements and its name", str(_kept["roast_name"]))
+store.forget(["gone-roast"])
 store.forget(["late-roast"])
 
 
@@ -1075,8 +1194,11 @@ store.forget(["sidebar-0", "sidebar-1"])
 os.environ.pop("ROAST_COACH_PAGE", None)
 
 
-for page in ("Coach", "Roasts", "After the roast", "Compare", "Learning", "Data",
-             "Method"):
+# Four pages now, not seven. "After the roast" is a tab on the roast itself,
+# "Learning" is the last section of Compare, and "Data" and "Method" are the two
+# tabs of Setup — because the roast you are reading and the roast you are writing
+# notes about are the same roast.
+for page in ("Coach", "Roasts", "Compare", "Setup"):
     os.environ["ROAST_COACH_PAGE"] = page
     opened = AppTest.from_file("app.py", default_timeout=300)
     opened.session_state[auth.SESSION_KEY] = "tester"
@@ -1108,8 +1230,7 @@ del library.link_report
 del _metrics_module.phase_shares
 store.VERSION = library.VERSION = _metrics_module.VERSION = 1
 try:
-    for page in ("Coach", "Roasts", "After the roast", "Compare", "Learning", "Data",
-             "Method"):
+    for page in ("Coach", "Roasts", "Compare", "Setup"):
         os.environ["ROAST_COACH_PAGE"] = page
         half = AppTest.from_file("app.py", default_timeout=120)
         half.session_state[auth.SESSION_KEY] = "tester"
@@ -1118,7 +1239,7 @@ try:
                   else str(half.exception[0].message).strip().splitlines()[-1])
         check(not half.exception, f"the {page} page survives a half-updated deploy", detail)
     # The Data page is where the deploy report lives, so end on it.
-    os.environ["ROAST_COACH_PAGE"] = "Data"
+    os.environ["ROAST_COACH_PAGE"] = "Setup"
     half = AppTest.from_file("app.py", default_timeout=120)
     half.session_state[auth.SESSION_KEY] = "tester"
     half.run()

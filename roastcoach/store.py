@@ -83,7 +83,9 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #      way this app has never seen still arrives; add_roasts(again=True) re-reads
 #   9  each roast records which importer read it, so a sync can tell for itself
 #      when the files need reading again — nobody has to know to ask
-VERSION = 9
+#  10  seal_unread(): a roast whose file is gone stops being counted as work
+#      outstanding, so no warning stands that nobody can act on
+VERSION = 10
 
 
 # What the importer keeps off a roast file. A roast stamped with an older number
@@ -669,6 +671,11 @@ def field_report(limit: int = 300, path: str | None = None) -> pd.DataFrame:
 _VERSION_MARKER = f'%"metrics_version": {METRICS_VERSION}%'
 _IMPORT_MARKER = f'%"import_version": {IMPORT_VERSION}%'
 
+# A roast whose file the Mac no longer has cannot be read again, however many
+# times it is asked. Sealing it says so once, instead of leaving a warning up
+# that nobody can ever act on.
+_FINAL_MARKER = '%"import_final": true%'
+
 
 def outdated(path: str | None = None) -> int:
     """How many stored roasts were measured by an older version of the metrics.
@@ -697,11 +704,60 @@ def unread(path: str | None = None) -> int:
     than waiting for somebody to know to tick a box.
     """
     try:
-        row = db.one("SELECT COUNT(*) FROM roasts WHERE data NOT LIKE :marker",
-                     {"marker": _IMPORT_MARKER}, override=path)
+        row = db.one("SELECT COUNT(*) FROM roasts WHERE data NOT LIKE :marker "
+                     "AND data NOT LIKE :final",
+                     {"marker": _IMPORT_MARKER, "final": _FINAL_MARKER}, override=path)
     except Exception:
         return 0
     return int(row[0]) if row else 0
+
+
+def unread_ids(path: str | None = None) -> list:
+    """Which roasts an older importer read and nobody has read again."""
+    try:
+        return [row[0] for row in db.rows(
+            "SELECT uid FROM roasts WHERE data NOT LIKE :marker AND data NOT LIKE :final",
+            {"marker": _IMPORT_MARKER, "final": _FINAL_MARKER}, override=path)]
+    except Exception:
+        return []
+
+
+def sealed(path: str | None = None) -> int:
+    """How many roasts are as complete as they will ever be."""
+    try:
+        row = db.one("SELECT COUNT(*) FROM roasts WHERE data LIKE :final",
+                     {"final": _FINAL_MARKER}, override=path)
+    except Exception:
+        return 0
+    return int(row[0]) if row else 0
+
+
+def seal_unread(path: str | None = None, note: str = "") -> int:
+    """Stop asking for files that are not there.
+
+    Called after a run that read *every* file in the folder: whatever is still
+    stamped by an older importer has no file left to read, because RoasTime has
+    since deleted it or it came from somewhere this Mac cannot see. Those roasts
+    keep everything they already had — the curve, the measurements, the notes —
+    and simply stop being counted as work outstanding.
+
+    If the file ever comes back, it is new to the `sources` table and gets
+    imported properly, which clears the seal with it.
+    """
+    ids = unread_ids(path)
+    stamp = _now()
+    for roast_id in ids:
+        stored = db.one("SELECT data FROM roasts WHERE uid = :id", {"id": roast_id},
+                        override=path)
+        if not stored:
+            continue
+        row = json.loads(stored[0])
+        row["import_final"] = True
+        row["import_note"] = note or f"no file to read again, as of {stamp[:10]}"
+        db.run("UPDATE roasts SET data = :data WHERE uid = :id",
+               {"data": json.dumps({k: _plain(v) for k, v in row.items()}), "id": roast_id},
+               override=path)
+    return len(ids)
 
 
 def remeasure(path: str | None = None, limit: int | None = None, progress=None) -> int:

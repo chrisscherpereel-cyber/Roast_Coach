@@ -153,6 +153,104 @@ def sync_companions(roasts_folder: Path) -> dict:
     return totals
 
 
+def audit(folder: Path, progress=None) -> dict:
+    """Check every roast file on this Mac against what the database made of it.
+
+    "Is all the data actually syncing?" deserves an answer with numbers in it,
+    not a reassurance. This is the only place both halves can be seen at once —
+    RoasTime's files are here and nowhere else, and the database is a query away
+    — so it reads each roast file, finds what it points at, and asks the same
+    three questions of every one:
+
+    1. Is this roast in the database at all?
+    2. Does the file name a bean and a recipe?
+    3. Did the app end up showing them?
+
+    Every roast that fails any of those is listed by name, with which step it
+    failed at, so the answer is never "something is wrong somewhere".
+    """
+    import json as _json
+
+    from roastcoach import library, store
+
+    frame = store.load_roasts()
+    stored = {}
+    if not frame.empty:
+        for row in frame.to_dict("records"):
+            stored[str(row.get("uid"))] = row
+
+    tables = library.tables()
+    coffees = library.coffee_lookup(tables)
+    recipes = tables.get("recipe") or {}
+    aliases = library.id_index(recipes)
+
+    report = {"files": 0, "unreadable": 0, "in_database": 0, "missing": 0,
+              "recipe_on_file": 0, "recipe_stored": 0, "recipe_shown": 0,
+              "bean_on_file": 0, "bean_stored": 0, "bean_shown": 0,
+              "no_recipe_id": [], "recipe_not_stored": [], "recipe_not_shown": [],
+              "not_in_database": [], "spellings": {}}
+
+    paths = [path for path in sorted(folder.iterdir())
+             if path.is_file() and not path.name.startswith(".")
+             and path.suffix.lower() in (".json", ".csv", "")]
+
+    for position, path in enumerate(paths):
+        if progress:
+            progress(position + 1, len(paths))
+        try:
+            record = _json.loads(path.read_text(encoding="utf-8-sig", errors="replace"))
+        except Exception:
+            report["unreadable"] += 1
+            continue
+        if not isinstance(record, dict) or "uid" not in record:
+            report["unreadable"] += 1
+            continue
+
+        report["files"] += 1
+        uid = str(record["uid"])
+        name = str(record.get("roastName") or uid)[:40]
+        row = stored.get(uid)
+        if row is None:
+            report["missing"] += 1
+            report["not_in_database"].append(name)
+            continue
+        report["in_database"] += 1
+
+        # Which spelling this file uses for its recipe link, whatever it is.
+        for key in record:
+            if "recipe" in str(key).lower() and not isinstance(record[key], (list, dict)):
+                report["spellings"][key] = report["spellings"].get(key, 0) + 1
+
+        recipe_id = library.link_id(record, "recipe")
+        if recipe_id:
+            report["recipe_on_file"] += 1
+            if recipe_id in aliases:
+                report["recipe_stored"] += 1
+                if str(row.get("recipe_name") or "").strip():
+                    report["recipe_shown"] += 1
+                else:
+                    report["recipe_not_shown"].append(f"{name} → {recipe_id}")
+            else:
+                report["recipe_not_stored"].append(f"{name} → {recipe_id}")
+        else:
+            # RoasTime shows a recipe for these too, so it is holding the link
+            # somewhere other than the roast file.
+            if not str(row.get("recipe_name") or "").strip():
+                report["no_recipe_id"].append(name)
+
+        bean_id = library.link_id(record, "bean")
+        if bean_id:
+            report["bean_on_file"] += 1
+            if bean_id in coffees:
+                report["bean_stored"] += 1
+                if str(row.get("bean") or "").strip():
+                    report["bean_shown"] += 1
+
+    report["roasts_in_database"] = len(stored)
+    report["extra_in_database"] = max(0, len(stored) - report["in_database"])
+    return report
+
+
 def sync_once(folder: Path, database: str | None, again: bool = False) -> dict:
     # What was asked for, then what the environment says, then what this Mac has
     # saved. The saved one is a preference, not an instruction: an environment
@@ -228,6 +326,20 @@ def sync_once(folder: Path, database: str | None, again: bool = False) -> dict:
         frame = store.load_roasts()
         learning.relearn(frame)          # keep the effect sizes current
         coach.auto_evaluate(frame)       # grade any advice this roast tests
+
+    # Everything in the folder has just been read. Anything still stamped by an
+    # older importer therefore has no file left here to read — RoasTime deletes
+    # roasts it has synced away, and some of these came from a folder this Mac no
+    # longer has. Say so once and stop counting them, rather than leaving a
+    # warning standing that nobody can act on.
+    if again:
+        left = store.unread()
+        if left:
+            sealed = store.seal_unread(
+                note=f"no file in {folder} when read again on {time.strftime('%Y-%m-%d')}")
+            print(f"{time.strftime('%H:%M')}  {sealed} roast(s) have no file here any "
+                  f"more, so they keep what they already had. They will not be asked "
+                  f"about again.")
 
     parts = []
     if report["added"]:
@@ -348,6 +460,9 @@ def main() -> None:
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--again", action="store_true",
                         help="read every roast file over, not only what changed")
+    parser.add_argument("--check", action="store_true",
+                        help="compare every file here against what the database made "
+                             "of it, and report anything that did not arrive")
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--uninstall", action="store_true")
     options = parser.parse_args()
@@ -359,6 +474,39 @@ def main() -> None:
     folder = find_folder(options.folder)
     if options.install:
         install(folder, options.database)
+        return
+
+    if options.check:
+        url = options.database or os.environ.get("ROAST_COACH_DATABASE_URL")
+        if not url and not os.environ.get("ROAST_COACH_DB"):
+            url = stored_database()
+        if url:
+            os.environ["ROAST_COACH_DATABASE_URL"] = url
+        found = audit(folder)
+        print(f"\n{found['files']} roast file(s) here · "
+              f"{found['roasts_in_database']} roast(s) in the database")
+        print(f"  in the database:        {found['in_database']}")
+        print(f"  missing from it:        {found['missing']}")
+        print(f"  recipe id on the file:  {found['recipe_on_file']}")
+        print(f"    that recipe stored:   {found['recipe_stored']}")
+        print(f"    showing in the app:   {found['recipe_shown']}")
+        print(f"  bean id on the file:    {found['bean_on_file']}")
+        print(f"    showing in the app:   {found['bean_shown']}")
+        if found["spellings"]:
+            print("  recipe field spellings: "
+                  + ", ".join(f"{key} ×{count}"
+                              for key, count in sorted(found["spellings"].items())))
+        for label, key in (("not in the database", "not_in_database"),
+                           ("recipe file never arrived", "recipe_not_stored"),
+                           ("recipe stored but not shown", "recipe_not_shown"),
+                           ("no recipe id on the file at all", "no_recipe_id")):
+            items = found[key]
+            if items:
+                print(f"\n  {len(items)} {label}:")
+                for item in items[:10]:
+                    print(f"    {item}")
+                if len(items) > 10:
+                    print(f"    …and {len(items) - 10} more")
         return
 
     if not options.every:

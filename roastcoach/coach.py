@@ -229,7 +229,7 @@ def control_moves(row, context, control: str, phase: str, steps: float,
         settings["bt"], settings["ibts"] = recipe.temperatures_at(curve, at)
     current = settings.get(control, _value(row, f"{control}{phase.capitalize()}"))
     change = recipe.move(control, at, current, steps, why,
-                         bean_temp=settings.get("bt"), drum_temp=settings.get("ibts"))
+                         bean_temp=settings.get("bt"), ibts_temp=settings.get("ibts"))
     if change:
         return [change]
 
@@ -241,7 +241,7 @@ def control_moves(row, context, control: str, phase: str, steps: float,
             "fan", at, settings.get("fan"), -1 if steps > 0 else 1,
             f"{why} — power is already at {float(current):.0f}, so this has to come from "
             "airflow instead",
-            bean_temp=settings.get("bt"), drum_temp=settings.get("ibts"))
+            bean_temp=settings.get("bt"), ibts_temp=settings.get("ibts"))
         if other:
             return [other]
     return []

@@ -154,7 +154,7 @@ def roast_profile_figure(
 
     # Panel 1 -- temperatures
     for i, (column, name, color, dash) in enumerate((
-        ("smoothDrumTemperature", "IBTS (drum)", c["drum"], "solid"),
+        ("smoothDrumTemperature", "IBTS", c["drum"], "solid"),
         ("smoothBeanTemperature", "Bean probe", c["bean"], "dot"),
     )):
         if column not in samples:
@@ -173,7 +173,7 @@ def roast_profile_figure(
     if show_raw:
         for column, name, color in (
             ("drumTemperature", "IBTS raw", c["drum"]),
-            ("beanTemperature", "Bean raw", c["bean"]),
+            ("beanTemperature", "Bean probe raw", c["bean"]),
         ):
             if column in samples:
                 fig.add_trace(
@@ -188,7 +188,7 @@ def roast_profile_figure(
     # Panel 2 -- rate of rise
     for i, (column, name, color, dash) in enumerate((
         ("smoothDrumDerivative", "IBTS RoR", c["drum"], "solid"),
-        ("smoothBeanDerivative", "Bean RoR", c["bean"], "dot"),
+        ("smoothBeanDerivative", "Bean probe RoR", c["bean"], "dot"),
     )):
         if column not in samples:
             continue
@@ -371,6 +371,220 @@ def all_roasts_figure(
     title = f"{len(curves)} roasts · {labels.get(measure, measure)}"
     fig.update_layout(title=title, hovermode="closest")
     return _style(fig, c, 620)
+
+
+
+# --- comparing several roasts ----------------------------------------------
+
+# One colour per roast, in a fixed order — never cycled, never reassigned when
+# the selection changes, so a roast keeps its colour as others come and go.
+#
+# Three, and not more, because overlaid curves cross: every pair is adjacent
+# somewhere on the chart, and under that all-pairs test three is as far as this
+# palette gets while staying separable for colour-blind readers in both light
+# and dark. (Checked, not judged: blue/orange/aqua clear the floors in both
+# modes; every fourth hue tried fails one of them in dark.) A fourth roast is
+# not drawn in a colour nobody can distinguish — it gets its own panel instead.
+SERIES = {
+    "light": ("#2a78d6", "#eb6834", "#1baf7a"),
+    "dark": ("#3987e5", "#d95926", "#199e70"),
+}
+
+# The second encoding, so identity never rests on colour alone.
+DASHES = ("solid", "dash", "dot")
+
+OVERLAY_LIMIT = len(DASHES)
+
+# The IBTS, smoothed — the same series the single-roast profile draws, so a roast
+# looks the same wherever it appears. RoasTime files the IBTS under
+# `drumTemperature`; it is the infrared sensor reading the beans, not the drum.
+_TEMPERATURE = "smoothDrumTemperature"
+_RATE = "smoothDrumDerivative"
+
+
+def _minutes(curve):
+    """Minutes from charge, whichever way this frame spells time."""
+    if "time_minutes" in curve:
+        return curve["time_minutes"]
+    if "seconds" in curve:
+        return curve["seconds"] / 60.0
+    return curve["time_seconds"] / 60.0
+
+
+def series_colors(theme: str) -> tuple:
+    return SERIES.get(theme, SERIES["light"])
+
+
+def _mark_event(fig: go.Figure, x, y, label: str, color: str, row: int, surface: str) -> None:
+    """A first crack or a drop, as a ringed point on the curve it belongs to."""
+    if x is None or y is None:
+        return
+    fig.add_trace(
+        go.Scatter(
+            x=[x], y=[y], mode="markers", showlegend=False,
+            marker=dict(size=9, color=color, line=dict(color=surface, width=2)),
+            hovertemplate=f"{label}: %{{x:.1f}} min, %{{y:.1f}} °C<extra></extra>",
+        ),
+        row=row, col=1,
+    )
+
+
+def compare_figure(roasts: list, theme: str = "light", align: str = "charge",
+                   height: int = 620) -> go.Figure:
+    """Several roasts on one pair of axes: IBTS temperature, and its rate of rise.
+
+    ``roasts`` is ``[{"label", "curve", "first_crack", "drop"}, …]`` — the curve
+    being the sample frame the profile chart already draws from, and the two
+    moments in minutes.
+
+    The IBTS is the line, because it is the line the roaster watches and the one
+    the recipes are written against. Both panels share a time axis and each has
+    its own scale, which is the whole reason they are stacked rather than drawn
+    on twin axes: temperature and rate of rise share no units, and crossing them
+    on one plot would invite a comparison that means nothing.
+
+    With ``align="first crack"`` time is measured from first crack instead of
+    from charge, so development is compared like with like — three roasts that
+    cracked at 8.2, 9.4 and 10.1 minutes line up on the moment that matters.
+    """
+    c = colors(theme)
+    hues = series_colors(theme)
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.07,
+                        row_heights=[0.58, 0.42])
+
+    drawn = 0
+    for position, roast in enumerate(roasts[:OVERLAY_LIMIT]):
+        curve = roast.get("curve")
+        if curve is None or getattr(curve, "empty", True):
+            continue
+        colour = hues[position % len(hues)]
+        dash = DASHES[position % len(DASHES)]
+        label = str(roast.get("label") or f"roast {position + 1}")
+
+        shift = float(roast.get("first_crack") or 0.0) if align == "first crack" else 0.0
+        minutes = _minutes(curve) - shift
+
+        for row, column, unit in ((1, _TEMPERATURE, "°C"), (2, _RATE, "°C/min")):
+            if column not in curve:
+                continue
+            fig.add_trace(
+                go.Scatter(
+                    x=minutes, y=curve[column], name=label, legendgroup=label,
+                    mode="lines", line=dict(color=colour, width=2, dash=dash),
+                    showlegend=(row == 1),
+                    hovertemplate="%{y:.1f} " + unit + " at %{x:.1f} min"
+                                  f"<extra>{label}</extra>",
+                ),
+                row=row, col=1,
+            )
+
+        # Direct labels as well as the legend: four series or fewer are named on
+        # the chart itself, so identity never rests on colour alone.
+        ends = (curve[_TEMPERATURE].dropna() if _TEMPERATURE in curve
+                else pd.Series(dtype=float))
+        if not ends.empty:
+            # Three roasts of one coffee end within a degree or two of each
+            # other, so the labels would sit on top of one another. Fan them out.
+            _end_label(fig, minutes.loc[ends.index[-1]], ends.iloc[-1], label,
+                       colour, 1, c["muted"], yshift=(1 - position) * 18)
+
+        # Only first crack is marked. The drop is where the line stops — a dot
+        # on the end of a line that has already ended says nothing, and it lands
+        # exactly where the roast's name has to go.
+        for moment, mark in (("first_crack", "first crack"),):
+            when = roast.get(moment)
+            if when is None or not np.isfinite(float(when)):
+                continue
+            at = float(when) - shift
+            nearest = (minutes - at).abs().idxmin() if len(minutes) else None
+            if nearest is not None and _TEMPERATURE in curve:
+                _mark_event(fig, at, curve.loc[nearest, _TEMPERATURE],
+                            f"{label} · {mark}", colour, 1, c["surface"])
+        drawn += 1
+
+    # Charge throws the rate of rise to −200 °C/min for a few seconds, which
+    # flattens the 0–20 band the roast is actually read in. Scale to what is
+    # readable; the autoscale button still restores the whole extent.
+    windows = [ror_view_range(roast["curve"]) for roast in roasts[:OVERLAY_LIMIT]
+               if roast.get("curve") is not None and not roast["curve"].empty]
+    windows = [window for window in windows if window]
+    if windows:
+        fig.update_yaxes(range=[min(low for low, _ in windows),
+                                max(high for _, high in windows)], row=2, col=1)
+
+    zero = "first crack" if align == "first crack" else "charge"
+    fig.update_yaxes(title_text="IBTS °C", row=1, col=1, gridcolor=c["grid"])
+    fig.update_yaxes(title_text="IBTS rate of rise °C/min", row=2, col=1,
+                     gridcolor=c["grid"])
+    fig.update_xaxes(title_text=f"minutes from {zero}", row=2, col=1, gridcolor=c["grid"])
+    fig.update_xaxes(gridcolor=c["grid"], row=1, col=1)
+    if align == "first crack":
+        for row in (1, 2):
+            fig.add_vline(x=0, line=dict(color=c["event"], width=1, dash="dot"),
+                          row=row, col=1)
+    fig.update_layout(hovermode="x unified",
+                      title=dict(text=f"IBTS · {drawn} roasts, lined up at {zero}"))
+    return _style(fig, c, height)
+
+
+def small_multiples_figure(roasts: list, theme: str = "light", height: int = 0) -> go.Figure:
+    """One panel per roast, same axes throughout, with the first as a ghost behind.
+
+    Past three roasts, an overlay stops being a comparison and becomes a knot.
+    The honest form is one panel each on identical scales: the eye compares
+    shapes across panels perfectly well, and the roast picked first is drawn
+    faintly on every one of them so there is always something to compare *to*.
+    """
+    c = colors(theme)
+    usable = [roast for roast in roasts
+              if roast.get("curve") is not None and not roast["curve"].empty]
+    if not usable:
+        return _style(go.Figure(), c, 260)
+
+    reference = usable[0]
+    fig = make_subplots(rows=len(usable), cols=1, shared_xaxes=True,
+                        vertical_spacing=0.035,
+                        subplot_titles=[str(roast.get("label") or "") for roast in usable])
+
+    for position, roast in enumerate(usable, start=1):
+        curve = roast["curve"]
+        minutes = _minutes(curve)
+
+        if position > 1:
+            ghost = reference["curve"]
+            fig.add_trace(
+                go.Scatter(x=_minutes(ghost), y=ghost[_TEMPERATURE],
+                           mode="lines", line=dict(color=c["muted"], width=1),
+                           opacity=0.35, showlegend=False,
+                           hovertemplate="%{y:.1f} °C<extra>"
+                                         f"{reference.get('label')}</extra>"),
+                row=position, col=1)
+
+        fig.add_trace(
+            go.Scatter(x=minutes, y=curve[_TEMPERATURE], mode="lines",
+                       line=dict(color=series_colors(theme)[0], width=2),
+                       showlegend=False,
+                       hovertemplate="%{y:.1f} °C at %{x:.1f} min<extra>"
+                                     f"{roast.get('label')}</extra>"),
+            row=position, col=1)
+
+        for moment in ("first_crack",):
+            when = roast.get(moment)
+            if when is None or not np.isfinite(float(when)):
+                continue
+            nearest = (minutes - float(when)).abs().idxmin() if len(minutes) else None
+            if nearest is not None:
+                _mark_event(fig, float(when), curve.loc[nearest, _TEMPERATURE],
+                            moment.replace("_", " "), series_colors(theme)[0],
+                            position, c["surface"])
+
+    fig.update_xaxes(title_text="minutes from charge", row=len(usable), col=1,
+                     gridcolor=c["grid"])
+    fig.update_yaxes(title_text="IBTS °C", gridcolor=c["grid"])
+    for note in fig.layout.annotations:
+        note.font = dict(size=12, color=c["muted"])
+    fig.update_layout(hovermode="x")
+    return _style(fig, c, height or max(260, 150 * len(usable) + 90))
 
 
 def trend_figure(same_coffee: pd.DataFrame, theme: str = "light") -> go.Figure:

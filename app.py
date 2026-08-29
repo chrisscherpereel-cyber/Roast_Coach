@@ -44,7 +44,7 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 9),
+NEEDS = (("roastcoach/store.py", store, 10),
          ("roastcoach/library.py", library, 8),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -514,12 +514,12 @@ def recommendation_card(item: dict | pd.Series, stored: bool = False, key: str =
         # Nobody sets an average, so no piece of advice here names one.
         for change in moves_of(item):
             control = str(change.get("control", ""))
-            # Both ways of saying when: the clock, and the bean temperature —
-            # because a Bullet recipe is written in temperature, and the roast is
-            # watched on the clock.
-            at = change.get("clock", "—")
-            if change.get("bt") is not None:
-                at = f"{at} · {float(change['bt']):.0f} °C BT"
+            # The IBTS temperature first, the clock second. That is the order the
+            # roaster works in: a Bullet recipe is written against the IBTS, and
+            # the change is made when that number arrives — early or late. The
+            # time is how you know whether the roast is on pace, which is worth
+            # knowing and is not the instruction.
+            at = optional(recipe, "when", change, default=change.get("clock", "—"))
 
             if change.get("from") is not None and change.get("to") is not None:
                 if control == "drop":
@@ -726,7 +726,7 @@ def page_roasts():
         "Total": view["totalRoastMinutes"].round(1),
         "First crack": view["firstCrackTime"].round(1),
         "Development": (view["totalRoastMinutes"] - view["firstCrackTime"]).round(1),
-        "Drop °C": view["drumDropTemperature"].round(0),
+        "Drop °C IBTS": view["drumDropTemperature"].round(0),
         "Weight loss %": view["weightLossPercent"].round(1),
         "Flags": view.get("flagSummary", pd.Series("", index=view.index)).fillna(""),
         "Rating": view["rating"].map(lambda v: "" if pd.isna(v) else f"{float(v):.1f}"),
@@ -739,7 +739,16 @@ def page_roasts():
     selected = view.iloc[rows[0]] if rows else view.iloc[0]
 
     st.divider()
-    roast_detail(selected, frame)
+    st.markdown(f"### {selected['label']}")
+
+    # One roast, two things to do with it: read what happened, and write down
+    # what only you can know. They used to be two pages, which meant finding the
+    # same roast twice.
+    reading, writing = st.tabs(["What happened", "After the roast"])
+    with reading:
+        roast_detail(selected, frame, heading=False)
+    with writing:
+        after_the_roast(selected, frame)
 
 
 PHASE_SHORT = {"Charge": "charge", "Drying": "dry", "Maillard": "Maillard",
@@ -873,8 +882,9 @@ def recipe_panel(row):
                    "power": "max", "fan": "max", "drum": "max"})
              .sort_values("at"))
     st.dataframe(
-        table[["clock", "bt", "ibts", "power", "fan", "drum", "what"]].rename(
-            columns={"clock": "time", "bt": "bean °C", "ibts": "drum °C", "what": ""}),
+        table[["ibts", "clock", "bt", "power", "fan", "drum", "what"]].rename(
+            columns={"clock": "time", "ibts": "IBTS °C", "bt": "bean probe °C",
+                     "what": ""}),
         width="stretch", hide_index=True, height=min(420, 40 + 35 * len(table)))
     st.caption("Both ways of reading a recipe: the clock, and the temperature each move was "
                "made at. Power, fan and drum move in whole steps, and this is where each one "
@@ -1044,8 +1054,9 @@ def readout(row):
                 unsafe_allow_html=True)
 
 
-def roast_detail(row, frame):
-    st.markdown(f"### {row['label']}")
+def roast_detail(row, frame, heading: bool = True):
+    if heading:
+        st.markdown(f"### {row['label']}")
     phase_bar(row)
     samples, events = curve_of(row["uid"])
 
@@ -1186,12 +1197,17 @@ def roast_detail(row, frame):
             st.rerun()
 
 
-def page_learning():
+def learning_section():
+    """How far a change moves a measure, on this machine — and which rules earn it.
+
+    Formerly its own page. It is the same question the rest of this page asks,
+    asked of every roast at once instead of the two or three in front of you.
+    """
     frame = roasts()
     if frame.empty:
-        empty_state("Roast Coach has no roasts yet.")
+        return
 
-    brand_header("What the coach has learned from your roasting")
+    st.markdown("## What the coach has learned from your roasting")
 
     st.markdown(
         "Generic advice knows which way to turn a knob. Only your roasts know how far. "
@@ -1547,7 +1563,9 @@ def page_data():
             "It kept a fixed list of id fields, and RoasTime does not always use those "
             "names — which is how a whole library of recipes can be here while every "
             "**Recipe** column stays empty. The files have the rest; they need reading "
-            "again, and only the Mac that roasts can do that.",
+            "again, and only the Mac that roasts can do that. Roasts whose file "
+            "RoasTime no longer keeps are not counted here — the sync settles those "
+            "on its own and stops asking.",
             "How to bring them across", key="unread", icon=":material/refresh:",
             steps=("On the Mac that roasts, open the sync page:\n\n"
                    "```bash\n./mac/roast-sync-app.command\n```\n\n"
@@ -1558,6 +1576,13 @@ def page_data():
                    "From a terminal instead:\n\n"
                    "```bash\npython3 mac/sync_to_database.py\n```\n\n"
                    "Then press **Update** in the sidebar here."))
+
+    settled = optional(store, "sealed", default=0) or 0
+    if settled:
+        st.caption(f"{settled} roast(s) were read by an older importer and their files "
+                   "are no longer on the Mac, so they keep what they already had — the "
+                   "curve, the measurements and anything typed here. Nothing further can "
+                   "be recovered for them, and nothing asks again.")
 
     # Roasts are compared bean against bean, so it matters that the bean files
     # are actually there and actually match. Say so plainly rather than letting a
@@ -1756,49 +1781,15 @@ def page_data():
                 st.rerun()
 
 
-def page_after():
-    """Everything that can only be known once the roast is out of the drum."""
-    frame = roasts()
-    if frame.empty:
-        empty_state("Roast Coach has no roasts yet.")
+def after_the_roast(row, frame):
+    """What only the roaster can know: colour, weights, defects, the cup.
 
-    brand_header("What RoasTime cannot know — colour, weights, defects, the cup")
-
+    This used to be a page of its own, which meant finding the roast twice —
+    once to look at it and again to write down what it tasted like. It belongs
+    on the roast, so it lives here, under the roast you already have open.
+    """
     scales = getattr(store, "COLOUR_SCALES", ())
-    colour_columns = [key for key, *_ in scales]
 
-    def missing(row) -> list[str]:
-        gaps = []
-        if not any(pd.notna(row.get(key)) and row.get(key) for key in colour_columns):
-            gaps.append("colour")
-        if not (pd.notna(row.get("weightRoasted")) and row.get("weightRoasted")):
-            gaps.append("out weight")
-        if not text_of(row.get("notes")):
-            gaps.append("notes")
-        return gaps
-
-    recent = frame.sort_values("roasted_at", ascending=False)
-    waiting = [(uid, label, gaps) for uid, label, gaps in
-               ((r["uid"], r["label"], missing(r)) for _, r in recent.iterrows()) if gaps]
-
-    top = st.columns([1, 1, 2])
-    top[0].metric("Roasts", len(frame))
-    top[1].metric("Still to fill in", len(waiting))
-    if waiting:
-        top[2].caption("Newest first. Pick one, fill in what you have, save — the roast list "
-                       "and every comparison pick it up straight away.")
-
-    choices = [(uid, f"{label}  ·  missing {', '.join(gaps)}") for uid, label, gaps in waiting]
-    choices += [(r["uid"], f"{r['label']}  ·  complete")
-                for _, r in recent.iterrows()
-                if r["uid"] not in {uid for uid, _, _ in waiting}]
-    if not choices:
-        st.success("Nothing outstanding.", icon=":material/check:")
-        return
-
-    picked = st.selectbox("Roast", [uid for uid, _ in choices],
-                          format_func=lambda uid: dict(choices)[uid])
-    row = frame[frame["uid"] == picked].iloc[0]
 
     facts = st.columns(5)
     facts[0].metric("Roast name", text_of(row.get("roast_name"))[:22] or "—")
@@ -1807,7 +1798,7 @@ def page_after():
     facts[3].metric("Green in", number(row.get("greenWeight"), " g", 0))
     facts[4].metric("Total", number(row.get("totalRoastMinutes"), " min"))
 
-    with st.form(f"after_{picked}"):
+    with st.form(f'after_{row["uid"]}'):
         st.markdown("**Roast colour** — whichever meter you have. Each scale is stored as "
                     "you read it; the app never converts between them, because they do not "
                     "convert cleanly.")
@@ -1845,21 +1836,21 @@ def page_after():
                            "visual_defects": defects.strip(), "rating": rating or None,
                            "cupping_score": score or None, "notes": notes})
             values["roasted_weight"] = out_weight or None
-            store.save_notes(picked, values)
+            store.save_notes(row["uid"], values)
             refresh()
             st.toast("Saved.")
             st.rerun()
 
     risks = [item for item in (optional(diagnostics, "assess", row.to_dict(),
                                         optional(diagnostics, "baseline_for", frame,
-                                                 row.get("coffee"), exclude=picked),
+                                                 row.get("coffee"), exclude=row["uid"]),
                                         default=[]) or []) if item.get("risk")]
     if risks:
         st.markdown("#### Anything the roast warned about")
         st.caption("These are hypotheses until somebody tastes them. Recording *not present* "
                    "is as useful as confirming — it is how the app learns which of its own "
                    "warnings are worth hearing.")
-        verdicts = optional(store, "sensory_for", picked, default={}) or {}
+        verdicts = optional(store, "sensory_for", row["uid"], default={}) or {}
         for item in risks:
             with st.container(border=True):
                 st.markdown(f"**{item['name']}** — {item['risk']}")
@@ -1870,9 +1861,9 @@ def page_after():
                 for column, verdict, label in zip(buttons, store.VERDICTS,
                                                   ("Confirmed at the table",
                                                    "Cupped, not present", "Unsure")):
-                    if column.button(label, key=f"after_{picked}_{item['id']}_{verdict}",
+                    if column.button(label, key=f'after_{row["uid"]}_{item["id"]}_{verdict}',
                                      use_container_width=True):
-                        store.save_sensory(picked, item["id"], verdict)
+                        store.save_sensory(row["uid"], item["id"], verdict)
                         refresh()
                         st.rerun()
 
@@ -1909,13 +1900,105 @@ def with_groupings(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
+def picked_roasts(frame):
+    """Choose particular roasts and see them on one pair of axes.
+
+    The grouping below answers "what do my Zambia roasts have in common"; this
+    answers the other question, the one asked standing at the machine — *these
+    two, or these three: what was different?* It is the same data and a quite
+    different act, so it comes first and takes one click.
+    """
+    if frame.empty:
+        return
+
+    ordered = frame.sort_values("roasted_at", ascending=False)
+    labels = {}
+    for _, row in ordered.iterrows():
+        name = f"{str(row['roasted_at'])[:10]} · {row.get('roast_name') or row.get('bean') or row['uid'][:8]}"
+        recipe_name = str(row.get("recipe_name") or "").strip()
+        if recipe_name:
+            name += f" · {recipe_name}"
+        labels[name] = row["uid"]
+
+    st.markdown("### Put particular roasts on top of one another")
+    chosen = st.multiselect(
+        "Roasts to compare", list(labels), default=list(labels)[:2],
+        help="Pick two or three to see them overlaid. Pick more and each gets its own "
+             "panel on the same axes, which is the readable way to hold four or five "
+             "roasts in view at once.")
+    if len(chosen) < 2:
+        st.caption("Pick at least two.")
+        return
+
+    align = st.radio(
+        "Line them up at", ["charge", "first crack"], horizontal=True,
+        help="Aligning at first crack compares development like with like, whatever "
+             "time each roast got there.", key="compare_align")
+
+    series = []
+    for name in chosen:
+        uid = labels[name]
+        curve, _ = curve_of(uid)
+        row = frame[frame["uid"] == uid]
+        if curve.empty or row.empty:
+            continue
+        row = row.iloc[0]
+        series.append({
+            "label": name.split(" · ", 1)[-1][:34],
+            "curve": curve,
+            "first_crack": row.get("firstCrackTime"),
+            "drop": row.get("totalRoastMinutes"),
+            "uid": uid,
+        })
+    if not series:
+        st.info("No stored curves for those roasts.")
+        return
+
+    limit = getattr(charts, "OVERLAY_LIMIT", 3)
+    if len(series) <= limit:
+        st.plotly_chart(
+            optional(charts, "compare_figure", series, theme(), align=align,
+                     default=None) or go_placeholder(),
+            width="stretch")
+    else:
+        st.caption(f"{len(series)} roasts — more than {limit} overlaid lines cannot be "
+                   "told apart by colour, so each gets its own panel on the same axes, "
+                   "with the first one you picked drawn faintly behind the others.")
+        st.plotly_chart(
+            optional(charts, "small_multiples_figure", series, theme(), default=None)
+            or go_placeholder(), width="stretch")
+
+    # The numbers behind the lines, which is also what makes the chart readable
+    # for anyone who cannot separate its colours.
+    side_by_side = pd.DataFrame([
+        {"Roast": item["label"],
+         "First crack": frame.loc[frame["uid"] == item["uid"], "firstCrackTime"].iloc[0],
+         "Development": frame.loc[frame["uid"] == item["uid"], "developmentTime"].iloc[0],
+         "Total": frame.loc[frame["uid"] == item["uid"], "totalRoastMinutes"].iloc[0],
+         "Drop °C IBTS": frame.loc[frame["uid"] == item["uid"], "drumDropTemperature"].iloc[0],
+         "Weight loss %": frame.loc[frame["uid"] == item["uid"], "weightLossPercent"].iloc[0]}
+        for item in series])
+    st.dataframe(side_by_side.round(2), width="stretch", hide_index=True)
+
+
+def go_placeholder():
+    """An empty figure, for a deploy whose charts.py predates a figure above."""
+    import plotly.graph_objects as go
+
+    return go.Figure()
+
+
 def page_compare():
     frame = roasts()
     if frame.empty:
         empty_state("Roast Coach has no roasts yet.")
 
-    brand_header("Group your roasts by anything, and see what changes")
+    brand_header("Compare roasts you pick, or groups of them")
     frame = with_groupings(frame)
+
+    picked_roasts(frame)
+    st.divider()
+    st.markdown("### Or group every roast and see what changes")
 
     picked = st.multiselect(
         "Group by", list(GROUP_BY), default=["Bean"],
@@ -2037,6 +2120,27 @@ def page_compare():
                                          highlight=highlight), width="stretch")
             st.caption("The reference roast — or the most recent one — is drawn in front.")
 
+    # What the coach has learned is the same act at a longer range: comparing
+    # roasts to find out how much a change moves a measure. It reads as the last
+    # section of this page, not a page of its own.
+    st.divider()
+    learning_section()
+
+
+def page_setup():
+    """Everything that is about the app rather than about a roast.
+
+    Two questions live here and they are not the same question: *is my data all
+    right* — where it is kept, what arrived, what is behind — and *why should I
+    believe any of this*. Two tabs, one page, and neither of them in the way of
+    the four things a roaster came to do.
+    """
+    data, method = st.tabs(["Data and sync", "How it decides"])
+    with data:
+        page_data()
+    with method:
+        page_method()
+
 
 def page_method():
     brand_header("What the app is willing to say, and how sure it is")
@@ -2143,17 +2247,18 @@ def main():
     user = auth.require(logo=_mark())
     account_strip(user)
 
+    # Four pages, in the order a roast lives through them: what to change next,
+    # the roast itself, how it compares, and everything that is about the app
+    # rather than about coffee. What was seven had the same roast on three of
+    # them — you filled in the cup on one page and read the curve on another.
     pages = [
         st.Page(page_coach, title="Coach", icon=":material/insights:"),
         st.Page(page_roasts, title="Roasts", icon=":material/local_fire_department:"),
-        st.Page(page_after, title="After the roast", icon=":material/edit_note:"),
         st.Page(page_compare, title="Compare", icon=":material/analytics:"),
-        st.Page(page_learning, title="Learning", icon=":material/school:"),
-        st.Page(page_data, title="Data", icon=":material/folder:"),
-        st.Page(page_method, title="Method", icon=":material/balance:"),
+        st.Page(page_setup, title="Setup", icon=":material/settings:"),
     ]
 
-    # The test suite opens one page at a time; the browser always gets all seven.
+    # The test suite opens one page at a time; the browser always gets all four.
     only = os.environ.get("ROAST_COACH_PAGE")
     if only:
         pages = [page for page in pages if page.title == only] or pages
