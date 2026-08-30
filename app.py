@@ -15,7 +15,7 @@ import pandas as pd
 import streamlit as st
 
 from roastcoach import (auth, charts, coach, db, demo_data, diagnostics, evidence,
-                        learning, library, recipe, store)
+                        knowledge, learning, library, recipe, store)
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach import metrics as metric_rules
 from roastcoach.naming import label_for
@@ -60,7 +60,8 @@ def load(token) -> pd.DataFrame:
 # app.py needs, and anything older is named on screen and worked around. Probing
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
-NEEDS = (("roastcoach/store.py", store, 12),
+NEEDS = (("roastcoach/knowledge.py", knowledge, 1),
+         ("roastcoach/store.py", store, 12),
          ("roastcoach/library.py", library, 9),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -1855,6 +1856,12 @@ def after_the_roast(row, frame, key: str = "after", compact: bool = False):
                                         key=f"{key}_variety_{row['uid']}")
         farm = columns[1].text_input("Farm or supplier", value=text_of(row.get("farm")),
                                      key=f"{key}_farm_{row['uid']}")
+        # What World Coffee Research knows about that variety, if it is one of
+        # theirs. Typed as free text on purpose — a roaster should not have to
+        # find their coffee in a list of 117 to write its name down.
+        known = optional(knowledge, "variety_summary", variety, default="") or ""
+        if known:
+            columns[0].caption(known)
 
         st.markdown("**Weights**")
         columns = st.columns(2)
@@ -1919,6 +1926,30 @@ def after_the_roast(row, frame, key: str = "after", compact: bool = False):
                              value=text_of(row.get("notes")), height=110,
                              key=f"{key}_notes_{row['uid']}")
 
+        # The lexicon's own words, to hand. Not a required vocabulary — what you
+        # tasted is what you tasted — but "papery" and "cereal" mean something
+        # particular to a trained panel, and using them that way makes two
+        # roasteries' notes comparable.
+        picked: list = []
+        vocabulary = optional(knowledge, "flavours", default=[]) or []
+        if vocabulary:
+            with st.expander("The WCR flavour vocabulary, if you want it"):
+                picked = st.multiselect(
+                    "Attributes", sorted(item["name"] for item in vocabulary),
+                    key=f"{key}_lexicon_{row['uid']}",
+                    help="World Coffee Research's Sensory Lexicon: 109 attributes, each "
+                         "with a physical reference standard. Picking them here adds them "
+                         "to the notes above when you save.")
+                for name in picked[:6]:
+                    meaning = optional(knowledge, "describe", name, default="") or ""
+                    if meaning:
+                        st.caption(f"**{name}** — {meaning}")
+                if picked and not any(
+                        optional(knowledge, "describe", name, default="") for name in picked):
+                    st.caption("Definitions are World Coffee Research's own writing and are "
+                               "not shipped with the app — `tools/import_lexicon.py` puts "
+                               "your copy where it can read them.")
+
         # RoasTime records a user id, not a name, so this arrives as a number or
         # not at all. One roastery is usually one roaster: default to them, and
         # let it be changed on the roast that somebody else ran.
@@ -1940,7 +1971,9 @@ def after_the_roast(row, frame, key: str = "after", compact: bool = False):
                 "roast_level": None if level == "—" else level,
                 "colour_sd": spread or None, "quaker_count": quakers or None,
                 "visual_defects": defects.strip(), "rating": rating or None,
-                "cupping_score": score or None, "notes": notes,
+                "cupping_score": score or None,
+                "notes": (notes + ("\n\n" + " · ".join(picked)
+                                   if picked and " · ".join(picked) not in notes else "")),
                 "roasted_by": roasted_by.strip() or None,
                 "colour_prepared_on": prepared_on,
             })
@@ -2302,6 +2335,101 @@ def page_setup():
         page_method()
 
 
+def the_library():
+    """The six books and standards the app has read, and what each is good for.
+
+    The interesting column is the last one. Not one of the three roasting texts
+    mentions the rate-of-rise crash, and two of them do not mention rate of rise
+    at all — so when this app warns about a crash, it is drawing on practitioner
+    convention and should say so rather than borrow the authority of a book that
+    is silent on the subject.
+    """
+    shelf = optional(knowledge, "shelf", default=[]) or []
+    if not shelf:
+        return
+
+    st.markdown("### The library")
+    st.caption("Six sources, read and summarised. Every finding below carries the page "
+               "it came from; none of them reproduces anybody's prose.")
+
+    st.dataframe(pd.DataFrame([
+        {"Source": f"{item.get('author', '')} ({item.get('year', '—')})",
+         "Title": item.get("title", ""),
+         "Kind": item.get("kind", ""),
+         "Evidence": item.get("grade", ""),
+         "Good for": ", ".join(item.get("covers", [])[:4]),
+         "Silent on": ", ".join(item.get("silent_on", [])) or "—"}
+        for item in shelf]), width="stretch", hide_index=True)
+
+    chosen = st.selectbox(
+        "Read one", [item["id"] for item in shelf],
+        format_func=lambda ident: (optional(knowledge, "cite", ident, default=ident)
+                                   or ident))
+    written = optional(knowledge, "text_of", chosen, default="") or ""
+    detail = optional(knowledge, "source", chosen, default={}) or {}
+
+    if detail.get("strongest"):
+        st.success(f"**Strongest thing it establishes** — {detail['strongest']}",
+                   icon=":material/verified:")
+    if detail.get("silent_on"):
+        st.info("**It says nothing about** " + ", ".join(detail["silent_on"])
+                + ". Where the app has an opinion on those, the opinion is not from here.",
+                icon=":material/info:")
+    if detail.get("caveat"):
+        st.warning(detail["caveat"], icon=":material/warning:")
+
+    if written:
+        with st.expander("Every finding, with its page"):
+            st.markdown(written)
+    elif detail.get("data"):
+        st.caption("This one is data rather than prose — see the flavour vocabulary and "
+                   "the varieties below.")
+
+    with st.expander("What may be done with these sources"):
+        for item in optional(knowledge, "rights", default=[]) or []:
+            st.markdown(f"**{item['source']}** — {item['terms']}")
+
+    # The lexicon, as a thing to look up rather than a thing to read.
+    flavours = optional(knowledge, "flavours", default=[]) or []
+    if flavours:
+        st.markdown("#### The flavour vocabulary")
+        described = sum(1 for item in flavours if item.get("definition"))
+        st.caption(f"{len(flavours)} attributes in "
+                   f"{len(optional(knowledge, 'categories', default=[]) or [])} categories, "
+                   "each anchored to a physical reference and an absolute intensity — so "
+                   "*hazelnut 3.5* means the same thing in two roasteries."
+                   + ("" if described else
+                      "  \n:orange[Definitions are World Coffee Research's own writing and "
+                      "are not in this repository. `python3 tools/import_lexicon.py "
+                      "<their PDF>` puts your copy where the app can read it.]"))
+        picked = st.selectbox("Category", ["all"] + (optional(knowledge, "categories",
+                                                             default=[]) or []))
+        shown = [item for item in flavours
+                 if picked == "all" or item.get("category") == picked]
+        st.dataframe(pd.DataFrame([
+            {"Attribute": item["name"], "Category": item["category"],
+             "Reference intensity": item.get("intensity"),
+             "Definition": item.get("definition", ""),
+             "Reference standard": "; ".join(item.get("references", [])[:2])}
+            for item in shown]), width="stretch", hide_index=True, height=360)
+
+    varieties = optional(knowledge, "varieties", default=[]) or []
+    if varieties:
+        st.markdown("#### The varieties")
+        st.caption(f"{len(varieties)} of them, with lineage, stature, bean size, the "
+                   "altitude they want and what they resist. This is the difference "
+                   "between a bean record that says *Bourbon* and one that means "
+                   "something.")
+        st.dataframe(pd.DataFrame([
+            {"Variety": item.get("name"), "Species": item.get("species", ""),
+             "Group": item.get("genetic_group", ""), "Stature": item.get("stature", ""),
+             "Bean size": item.get("bean_size", ""),
+             "Altitude": item.get("optimal_altitude", ""),
+             "Quality potential": item.get("quality_potential_at_high_altitude", ""),
+             "Leaf rust": item.get("leaf_rust", "")}
+            for item in varieties]), width="stretch", hide_index=True, height=360)
+
+
 def page_method():
     brand_header("What the app is willing to say, and how sure it is")
 
@@ -2373,6 +2501,8 @@ def page_method():
                "of most modern rate-of-rise vocabulary — crash, flick, declining rate of "
                "rise, development ratio — and that is a different thing from experimental "
                "validation.")
+
+    the_library()
 
     st.markdown("### Which warnings have actually landed")
     board = optional(store, "sensory_scoreboard", default=pd.DataFrame())

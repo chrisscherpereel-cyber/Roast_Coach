@@ -1,0 +1,93 @@
+{
+  "about": "Every source Roast Coach draws on, and what each one is good for. The app reads this file at startup; adding a source is dropping a file in and adding an entry here, not editing code.",
+  "sources": [
+    {
+      "id": "hoos-2015",
+      "file": "roasting/hoos-2015-modulating-the-flavor-profile.md",
+      "title": "Modulating the Flavor Profile of Coffee: One Roaster's Manifesto",
+      "author": "Rob Hoos",
+      "year": 2015,
+      "publisher": "Self-published, Portland OR",
+      "isbn": "978-0-692-41770-6",
+      "kind": "practitioner experiment",
+      "grade": "B",
+      "covers": ["maillard time", "development time", "acidity", "body", "terminal temperature", "batch size"],
+      "strongest": "Maillard time — colour change to first crack — moves body and complexity. Four coffees, blind cupping panel, other segments held to within ten seconds, corroborated by thirteen logged production runs.",
+      "silent_on": ["rate of rise shape", "crash", "flick", "development time ratio"],
+      "rights": "Copyright the author. This library holds findings and citations in our own words, not the book's text."
+    },
+    {
+      "id": "munchow-2018",
+      "file": "roasting/munchow-2018-roasting-foundation.md",
+      "title": "Roasting Foundation",
+      "author": "Morten Münchow",
+      "year": 2018,
+      "edition": "2nd",
+      "publisher": "CoffeeMind Press, Valby",
+      "isbn": "978-87-93507-03-6",
+      "kind": "teaching text citing peer-reviewed work",
+      "grade": "A",
+      "covers": ["roast colour", "development", "probe comparability", "repeatability", "roast degree"],
+      "strongest": "Colour accounts for roughly 80% of sensory variation and timing roughly 20%, from Giacalone, Münchow et al. (2018) in Food Quality and Preference — the only peer-reviewed result any of these sources rests a number on.",
+      "silent_on": ["rate of rise", "crash", "flick"],
+      "rights": "Copyright CoffeeMind. Findings and citations in our own words."
+    },
+    {
+      "id": "brault",
+      "file": "roasting/brault-the-coffee-roasters-handbook.md",
+      "title": "The Coffee Roaster's Handbook: A How-To Guide for Home and Professional Roasters",
+      "author": "Len Brault",
+      "kind": "practitioner handbook",
+      "grade": "C",
+      "covers": ["roast levels", "green defects", "roast faults", "batch size"],
+      "strongest": "A named roast-level ladder with temperatures, and a green-versus-roast fault test: run the same profile on another origin — if the fault does not follow, it came in with the bean.",
+      "silent_on": ["rate of rise", "development time ratio", "crash", "flick", "scorching", "tipping"],
+      "rights": "Copyright the author. Findings and citations in our own words.",
+      "caveat": "The supplied copy has empty chapters from the cupping section onward, so nothing here rests on those."
+    },
+    {
+      "id": "kornman-2024",
+      "file": "processing/kornman-2024-fermentation-flavor-continuum.md",
+      "title": "The Coffee Fermentation Flavor Continuum",
+      "author": "Chris Kornman",
+      "year": 2024,
+      "publisher": "Royal Coffee",
+      "kind": "trade literature",
+      "grade": "D",
+      "covers": ["processing method", "fermentation", "ferment taint"],
+      "strongest": "Uniformity across the cups, not intensity in one, is what separates a successful ferment from the ferment defect.",
+      "silent_on": ["roasting"],
+      "rights": "Copyright Royal Coffee. Findings and citations in our own words.",
+      "caveat": "Appeals to research four times and names no study."
+    },
+    {
+      "id": "wcr-lexicon",
+      "file": "sensory/wcr-sensory-lexicon.md",
+      "data": "sensory/wcr-sensory-lexicon-vocabulary.json",
+      "title": "Sensory Lexicon",
+      "author": "World Coffee Research",
+      "year": 2017,
+      "edition": "2.0",
+      "kind": "reference standard",
+      "grade": "A",
+      "covers": ["flavour vocabulary", "tasting", "cupping"],
+      "strongest": "109 flavour attributes in 17 categories, each anchored to a physical reference standard and an absolute 0–15 intensity, so 'hazelnut 3.5' means the same thing in two roasteries.",
+      "rights": "Copyright © 2017 World Coffee Research. All rights reserved. This repository carries the attribute names, categories and reference intensities — which are facts — and not WCR's definitions. See the note in the file, and tools/import_lexicon.py.",
+      "download": "https://worldcoffeeresearch.org/resources/sensory-lexicon"
+    },
+    {
+      "id": "wcr-varieties",
+      "file": "varieties/wcr-arabica-and-robusta-varieties.md",
+      "data": "varieties/wcr-arabica-and-robusta-varieties.json",
+      "title": "Arabica and Robusta Varieties Catalog",
+      "author": "World Coffee Research",
+      "year": 2025,
+      "kind": "reference standard",
+      "grade": "A",
+      "covers": ["variety", "cultivar", "altitude", "bean size", "disease resistance", "quality potential"],
+      "strongest": "117 varieties with lineage, genetic group, stature, bean size, optimal altitude by latitude, disease resistance and quality potential — the difference between a bean record that says 'Bourbon' and one that means something.",
+      "rights": "© World Coffee Research, licensed CC BY-NC-ND 4.0. Redistributed here with attribution for noncommercial use. If Roast Coach is ever sold, this must be removed or separately licensed.",
+      "download": "https://varieties.worldcoffeeresearch.org/"
+    }
+  ]
+}

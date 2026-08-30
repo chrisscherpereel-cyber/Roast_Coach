@@ -679,6 +679,119 @@ check(not _next.empty and _next["changed"].any(),
       "the next roast is a plan with the changes marked in it",
       f"{len(_next)} steps, {int(_next['changed'].sum())} changed")
 
+print("\nTHE LIBRARY — what the app has read, and what it has not")
+from roastcoach import knowledge  # noqa: E402
+
+_shelf = knowledge.shelf()
+check(len(_shelf) >= 6, "the library reads its own folder rather than being compiled in",
+      ", ".join(item["id"] for item in _shelf))
+check(all(item.get("grade") and item.get("kind") for item in _shelf),
+      "and every source says what kind of thing it is and how far it can be trusted")
+
+# The point of the whole exercise: knowing what a source does *not* say. Not one
+# of the three roasting texts mentions the rate-of-rise crash, and the app has
+# plenty to say about it — so it must not borrow their authority for it.
+_silent = [item["id"] for item in knowledge.silent_on("crash")]
+check(len(_silent) >= 3,
+      "a source can be asked what it is silent on — none of the roasting texts "
+      "mentions the crash, which is worth knowing before citing one at somebody",
+      ", ".join(_silent))
+check(not knowledge.covering("crash"),
+      "so nothing in the library is offered as a source for it")
+check([item["id"] for item in knowledge.covering("colour")] == ["munchow-2018"],
+      "while colour has exactly one source, and it is the one citing peer-reviewed work",
+      ", ".join(item["id"] for item in knowledge.covering("colour")))
+check("Münchow" in knowledge.cite("munchow-2018")
+      and "2018" in knowledge.cite("munchow-2018"),
+      "and a source cites as a person, a year and a title", knowledge.cite("munchow-2018"))
+check("Giacalone" in knowledge.text_of("munchow-2018"),
+      "the findings themselves are there to read, with the studies they rest on")
+
+# World Coffee Research's flavour vocabulary.
+_flavours = knowledge.flavours()
+check(len(_flavours) == 109 and len(knowledge.categories()) == 17,
+      "the Sensory Lexicon's 109 attributes are here, in their 17 categories",
+      f"{len(_flavours)} attributes")
+check(all(item.get("name") and item.get("category") for item in _flavours),
+      "each with its category and, where the lexicon gives one, its reference intensity")
+check(len(knowledge.flavours("Fruity")) > 10,
+      "and they can be asked for a category at a time",
+      f"{len(knowledge.flavours('Fruity'))} fruity attributes")
+
+# The definitions are WCR's writing and are not in the repository. The app has to
+# work without them and use them when the roaster has imported their own copy.
+_definitions_here = bool(knowledge.describe("Almond"))
+check(isinstance(knowledge.describe("Almond"), str),
+      "definitions are World Coffee Research's own writing, so the app asks for them "
+      "and carries on without them",
+      "imported" if _definitions_here else "not imported — vocabulary only")
+
+# The repository must work with no definitions at all, because that is what
+# anybody who clones it has. Take them away and check nothing falls over.
+_held_definitions = knowledge.DEFINITIONS
+try:
+    knowledge.DEFINITIONS = (Path("/nonexistent/wcr.json"),)
+    knowledge.definitions.cache_clear()
+    check(knowledge.definitions() == {},
+          "with no imported copy the app holds no definitions at all")
+    check(len(knowledge.flavours()) == 109
+          and all(item["definition"] == "" for item in knowledge.flavours()),
+          "and the vocabulary still works — 109 attributes, every definition blank, "
+          "which is a working tasting picker and no copyright question")
+    check(knowledge.describe("Almond") == "",
+          "and asking what one means says nothing rather than failing")
+finally:
+    knowledge.DEFINITIONS = _held_definitions
+    knowledge.definitions.cache_clear()
+
+# The importer reads the roaster's own PDF. Its parsing is the part that can rot.
+import tools.import_lexicon as _importer  # noqa: E402
+
+_pretend = """
+STRAWBERRY
+The somewhat sweet, slightly sour, floral, fruity aromatic associated with strawberry.
+
+REF E RENCE
+
+Molasses
+Dark, caramelized top notes that may include slightly sharp, acrid notes characteristic of
+molasses.
+
+FULLNESS
+The foundation of flavor notes that gives substance to the product.
+
+Strawberry
+Raspberry
+"""
+_read = _importer.definitions_in(_pretend, ["Strawberry", "Molasses", "Body/Fullness"])
+check(_read.get("Strawberry", "").endswith("strawberry."),
+      "the importer reads an attribute set as a heading with its sentence beneath")
+check(_read.get("Molasses", "").endswith("molasses."),
+      "and follows a definition that wraps onto a line of one word",
+      _read.get("Molasses", "")[-40:])
+check("substance" in _read.get("Body/Fullness", ""),
+      "and finds Body/Fullness, which the lexicon prints as FULLNESS — indexed under "
+      "one name and set under another")
+check(len(_read) == 3,
+      "while the contents and index pages, where a name is followed by another name "
+      "rather than a sentence, are not mistaken for definitions")
+
+# The varieties.
+check(len(knowledge.varieties()) == 117,
+      "and the variety catalogue, all 117 of them",
+      f"{len(knowledge.varieties())} varieties")
+check(knowledge.variety("Bourbon").get("genetic_group"),
+      "a variety can be looked up by name", str(knowledge.variety("Bourbon").get("stature")))
+check(knowledge.variety("bourbon") == knowledge.variety("Bourbon"),
+      "however it is capitalised, because it is typed by a person")
+check("altitude" in knowledge.variety_summary("Gesha"),
+      "and reads back as one line for the bean record",
+      knowledge.variety_summary("Gesha")[:70])
+check(knowledge.variety_summary("not a real coffee") == "",
+      "while a variety nobody has heard of says nothing rather than guessing")
+check(all(item["terms"] for item in knowledge.rights()),
+      "every source states what may be done with it")
+
 print("\nAFTER THE ROAST — what RoasTime cannot know")
 _meters = [name for _key, name, _span in store.METERS]
 check(len(store.METERS) == 4 and len(store.COLOUR_SCALES) == 8,

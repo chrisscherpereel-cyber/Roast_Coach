@@ -1,0 +1,1102 @@
+{
+ "source": {
+  "title": "World Coffee Research Sensory Lexicon: Unabridged Definition and References",
+  "publisher": "World Coffee Research",
+  "edition": "2.0",
+  "edition_as_printed": "Second Edition, 2017 (cover reads \"VERSION 2.0 — 2017\")",
+  "year": 2017,
+  "copyright_notice": "Copyright © 2017 World Coffee Research. All rights reserved.",
+  "license": "not stated — the document contains no licence, permitted-use or reuse statement. The only rights statement in the document is the copyright notice, quoted verbatim: \"Copyright © 2017 World Coffee Research. All rights reserved.\"",
+  "address": "5728 John Kimbrough Blvd., Suite 230, College Station, TX 77843-2477",
+  "url": "www.worldcoffeeresearch.org",
+  "developed_by": "The lab of Edgar Chambers IV, Ph.D. at the Sensory Analysis Center, Kansas State University; validated by the lab of Rhonda Miller at Texas A&M University.",
+  "intensity_scale": {
+   "range": [
+    0,
+    15
+   ],
+   "label": "0–15 Point Intensity Scale",
+   "anchors": {
+    "0": "None",
+    "2": "Barely detectable",
+    "4": "Identifiable, but not very intense",
+    "6": "Slightly intense",
+    "8": "Moderately intense",
+    "10": "Intense",
+    "12": "Very intense",
+    "15": "Extremely intense"
+   },
+   "note": "Each reference is labelled either an aroma or a flavor reference. Some references (all of the FlavorActiV standards) carry no intensity score: \"the reference has been validated and approved for use as a quality representation of the flavor attribute, but has not undergone assessment to determine a World Coffee Research Sensory Lexicon intensity score.\""
+  },
+  "attribute_count": 109,
+  "notes": [
+   "The PDF supplied is the second edition / version 2.0, dated 2017 on both its cover and its copyright page.",
+   "Field \"intensity\" is a single representative value: the first Flavor intensity given for the attribute, or the first Aroma intensity when no Flavor reference exists, or null. Field \"intensities\" carries every reference intensity as printed.",
+   "Sour, Bitter, Salty and Sweet each appear twice in the book: once in full under Taste Basics and once as a cross-reference in a later section. They appear once here, with the second section recorded in \"also_listed_in\"."
+  ]
+ },
+ "categories": [
+  {
+   "name": "Taste Basics"
+  },
+  {
+   "name": "Fruity"
+  },
+  {
+   "name": "Sour/Acid"
+  },
+  {
+   "name": "Alcohol/Fermented"
+  },
+  {
+   "name": "Green/Vegetative"
+  },
+  {
+   "name": "Stale/Papery"
+  },
+  {
+   "name": "Earthy"
+  },
+  {
+   "name": "Chemical"
+  },
+  {
+   "name": "Roasted"
+  },
+  {
+   "name": "Cereal"
+  },
+  {
+   "name": "Spices"
+  },
+  {
+   "name": "Nutty"
+  },
+  {
+   "name": "Cocoa"
+  },
+  {
+   "name": "Sweet"
+  },
+  {
+   "name": "Floral"
+  },
+  {
+   "name": "Amplitude",
+   "description": "Amplitude measures the overall impression of a product judged on the following aspects: overall impact, blended (the extent to which the flavors and aromas of the product blend together), longevity, and body/ fullness. The amplitude reflects the degree to which the characteristics of the product adhere together."
+  },
+  {
+   "name": "Mouthfeel"
+  }
+ ],
+ "attributes": [
+  {
+   "name": "Sweet",
+   "category": "Taste Basics",
+   "intensity": 1.0,
+   "references": [
+    "1.0% sucrose solution"
+   ]
+  },
+  {
+   "name": "Sour",
+   "category": "Taste Basics",
+   "intensity": 1.5,
+   "references": [
+    "0.015% citric acid solution",
+    "0.05% citric acid solution",
+    "FlavorActiV \"sour\" (citric acid)"
+   ]
+  },
+  {
+   "name": "Bitter",
+   "category": "Taste Basics",
+   "intensity": 2.0,
+   "references": [
+    "0.01% caffeine solution",
+    "0.02% caffeine solution",
+    "0.035 % caffeine solution",
+    "0.05% caffeine solution",
+    "FlavorActiv “bitter\" (iso-alpha-acids)"
+   ]
+  },
+  {
+   "name": "Salty",
+   "category": "Taste Basics",
+   "intensity": 1.5,
+   "references": [
+    "0.15% sodium chloride solution",
+    "FlavorActiV “salty\" (sodium chloride)"
+   ]
+  },
+  {
+   "name": "Fruity",
+   "category": "Fruity",
+   "intensity": 4.0,
+   "references": [
+    "Juicy Juice 100% Juice Kiwi Strawberry",
+    "Juicy Juice 100% Juice Kiwi Strawberry",
+    "Le Nez du Café n.17 “apple”"
+   ]
+  },
+  {
+   "name": "Berry",
+   "category": "Fruity",
+   "intensity": 9.0,
+   "references": [
+    "Private Selection Triple Berry Preserves",
+    "Private Selection Triple Berry Preserves",
+    "Welch’s Unfiltered 100% Juice Blackberry"
+   ]
+  },
+  {
+   "name": "Strawberry",
+   "category": "Fruity",
+   "intensity": 6.0,
+   "references": [
+    "Dole Whole Strawberries All Natural",
+    "Dole Whole Strawberries All Natural"
+   ]
+  },
+  {
+   "name": "Raspberry",
+   "category": "Fruity",
+   "intensity": 6.5,
+   "references": [
+    "Jell-O Raspberry (dry gelatin powder)"
+   ]
+  },
+  {
+   "name": "Blueberry",
+   "category": "Fruity",
+   "intensity": 6.0,
+   "references": [
+    "Oregon Fruit Products Blueberries in Light Syrup (canned)",
+    "Oregon Fruit Products Blueberries in Light Syrup (canned)"
+   ]
+  },
+  {
+   "name": "Blackberry",
+   "category": "Fruity",
+   "intensity": 5.5,
+   "references": [
+    "Smucker’s Blackberry Jam"
+   ]
+  },
+  {
+   "name": "Dried Fruit",
+   "category": "Fruity",
+   "intensity": 4.5,
+   "references": [
+    "Sunsweet Amaz!n Prune Juice",
+    "Sunsweet Amaz!n Prune Juice",
+    "Mixture of Sun-Maid Raisins and Sun-Maid Prunes",
+    "Mixture of Sun-Maid Raisins and Sun-Maid Prunes"
+   ]
+  },
+  {
+   "name": "Raisin",
+   "category": "Fruity",
+   "intensity": 5.5,
+   "references": [
+    "Sun-Maid Raisins",
+    "Sun-Maid Raisins"
+   ]
+  },
+  {
+   "name": "Prune",
+   "category": "Fruity",
+   "intensity": 5.0,
+   "references": [
+    "Sun-Maid Prunes",
+    "Sun-Maid Prunes"
+   ]
+  },
+  {
+   "name": "Other Fruit",
+   "category": "Fruity",
+   "intensity": 7.0,
+   "references": [
+    "Le Nez du Café n.17 “apple”"
+   ]
+  },
+  {
+   "name": "Apple",
+   "category": "Fruity",
+   "intensity": 6.0,
+   "references": [
+    "Le Nez du Café n.17 “apple”",
+    "Gerber 2nd Foods Applesauce",
+    "FlavorActiV “apple\" (ethyl hexanoate)"
+   ]
+  },
+  {
+   "name": "Pear",
+   "category": "Fruity",
+   "intensity": 7.5,
+   "references": [
+    "Jumax Pear Nectar (can)"
+   ]
+  },
+  {
+   "name": "Peach",
+   "category": "Fruity",
+   "intensity": 7.0,
+   "references": [
+    "Fresh peach pit",
+    "Jell-O Peach (dry gelatin powder)"
+   ]
+  },
+  {
+   "name": "Grape",
+   "category": "Fruity",
+   "intensity": 5.0,
+   "references": [
+    "Welch’s 100% Juice Unfiltered Concord Grape",
+    "FlavorActiV “grape\" (methyl anthranilate)"
+   ]
+  },
+  {
+   "name": "Cherry",
+   "category": "Fruity",
+   "intensity": 4.0,
+   "references": [
+    "R.W. Knudsen Just Tart Cherry Juice"
+   ]
+  },
+  {
+   "name": "Pomegranate",
+   "category": "Fruity",
+   "intensity": 7.5,
+   "references": [
+    "R.W. Knudsen Organic Just Pomegranate Juice",
+    "R.W. Knudsen Organic Just Pomegranate Juice"
+   ]
+  },
+  {
+   "name": "Coconut",
+   "category": "Fruity",
+   "intensity": 7.5,
+   "references": [
+    "Coconut imitation extract",
+    "FlavorActiV “coconut\" (whiskey lactone)"
+   ]
+  },
+  {
+   "name": "Pineapple",
+   "category": "Fruity",
+   "intensity": 6.0,
+   "references": [
+    "Dole Pineapple Juice (canned)",
+    "Dole Pineapple Juice (canned)",
+    "FlavorActiV “pineapple\" (ethyl butyrate)"
+   ]
+  },
+  {
+   "name": "Citrus Fruit",
+   "category": "Fruity",
+   "intensity": 6.5,
+   "references": [
+    "Peels of lemon and lime",
+    "Grapefruit peel",
+    "Five Alive Citrus (frozen concentrate)"
+   ]
+  },
+  {
+   "name": "Lemon",
+   "category": "Fruity",
+   "intensity": 7.0,
+   "references": [
+    "Fresh lemon juice",
+    "Fresh lemon juice",
+    "Le Nez du Café n. 15 ‘lemon’"
+   ]
+  },
+  {
+   "name": "Grapefruit",
+   "category": "Fruity",
+   "intensity": 11.0,
+   "references": [
+    "Ocean Spray 100% White Grapefruit Juice",
+    "Kroger 100% White Grapefruit Juice"
+   ]
+  },
+  {
+   "name": "Orange",
+   "category": "Fruity",
+   "intensity": 10.0,
+   "references": [
+    "Tropicana Pure Premium Original 100% No Pulp Orange Juice"
+   ]
+  },
+  {
+   "name": "Lime",
+   "category": "Fruity",
+   "intensity": 7.0,
+   "references": [
+    "Lime peel",
+    "ReaLime 100% Lime Juice"
+   ]
+  },
+  {
+   "name": "Sour Aromatics",
+   "category": "Sour/Acid",
+   "intensity": 2.0,
+   "references": [
+    "Bush’s Pinto Beans (canned)"
+   ]
+  },
+  {
+   "name": "Acetic Acid",
+   "category": "Sour/Acid",
+   "intensity": 2.0,
+   "references": [
+    "0.5% acetic acid solution",
+    "0.5% acetic acid solution",
+    "1.0% acetic acid solution",
+    "1.0% acetic acid solution",
+    "2.0% acetic acid solution",
+    "2.0% acetic acid solution",
+    "FlavorActiV “acetic\" (acetic acid)"
+   ]
+  },
+  {
+   "name": "Butyric Acid",
+   "category": "Sour/Acid",
+   "intensity": 3.0,
+   "references": [
+    "0.4 µl/l butyric acid solution",
+    "0.4 µl/l butyric acid solution",
+    "FlavorActiV “butyric\" (butyric acid)"
+   ]
+  },
+  {
+   "name": "Isovaleric Acid",
+   "category": "Sour/Acid",
+   "intensity": 4.0,
+   "references": [
+    "0.2 µl/l isovaleric acid solution",
+    "0.2 µl/l isovaleric acid solution",
+    "FlavorActiV “isovaleric (cheese)\" (isovaleric acid)"
+   ]
+  },
+  {
+   "name": "Citric Acid",
+   "category": "Sour/Acid",
+   "intensity": 2.5,
+   "references": [
+    "0.025 % citric acid solution",
+    "0.025 % citric acid solution",
+    "0.05 % citric acid solution",
+    "0.05 % citric acid solution"
+   ]
+  },
+  {
+   "name": "Malic Acid",
+   "category": "Sour/Acid",
+   "intensity": 3.0,
+   "references": [
+    "0.5 g/l malic acid solution",
+    "1.0 g/l malic acid solution"
+   ]
+  },
+  {
+   "name": "Alcohol",
+   "category": "Alcohol/Fermented",
+   "intensity": 5.0,
+   "references": [
+    "Absolut Vodka (80 Proof)"
+   ]
+  },
+  {
+   "name": "Whiskey",
+   "category": "Alcohol/Fermented",
+   "intensity": 5.5,
+   "references": [
+    "Jack Daniel’s Tennessee Whiskey Old No. 7"
+   ]
+  },
+  {
+   "name": "Winey",
+   "category": "Alcohol/Fermented",
+   "intensity": 10.0,
+   "references": [
+    "Yellow Tail Cabernet Sauvignon"
+   ]
+  },
+  {
+   "name": "Fermented",
+   "category": "Alcohol/Fermented",
+   "intensity": 5.0,
+   "references": [
+    "Guinness Extra Stout beer",
+    "Fermented grass",
+    "FlavorActiV \"fermented\" (ethyl isovalerate)"
+   ]
+  },
+  {
+   "name": "Overripe/Near fermented",
+   "category": "Alcohol/Fermented",
+   "intensity": 6.5,
+   "references": [
+    "Overripe banana",
+    "Overripe banana"
+   ]
+  },
+  {
+   "name": "Olive Oil",
+   "category": "Green/Vegetative",
+   "intensity": 8.5,
+   "references": [
+    "Bertolli Extra Virgin Olive Oil"
+   ]
+  },
+  {
+   "name": "Raw",
+   "category": "Green/Vegetative",
+   "intensity": 3.0,
+   "references": [
+    "Fisher Natural Whole Almonds"
+   ]
+  },
+  {
+   "name": "Under–ripe",
+   "category": "Green/Vegetative",
+   "intensity": 7.5,
+   "references": [
+    "Grapefruit peel"
+   ]
+  },
+  {
+   "name": "Peapod",
+   "category": "Green/Vegetative",
+   "intensity": 7.0,
+   "references": [
+    "Le Nez du Café, no. 3 “garden peas”",
+    "FlavorActiV “under-ripe fruit\" (acetaldehyde)"
+   ]
+  },
+  {
+   "name": "Green",
+   "category": "Green/Vegetative",
+   "intensity": 6.0,
+   "references": [
+    "Parsley water",
+    "Parsley water"
+   ]
+  },
+  {
+   "name": "Fresh",
+   "category": "Green/Vegetative",
+   "intensity": 7.0,
+   "references": [
+    "Fresh green grass",
+    "FlavorActiV “freshly cut grass\" (cis-3-hexanol)"
+   ]
+  },
+  {
+   "name": "Dark Green",
+   "category": "Green/Vegetative",
+   "intensity": 6.0,
+   "references": [
+    "Green Giant Cut Green Beans (canned, liquid of)",
+    "Green Giant Cut Green Beans (canned, liquid of)",
+    "Del Monte Leaf Spinach (canned, liquid of)",
+    "Del Monte Leaf Spinach (canned, liquid of)"
+   ]
+  },
+  {
+   "name": "Vegetative",
+   "category": "Green/Vegetative",
+   "intensity": 6.0,
+   "references": [
+    "Cut Asparagus Spears (canned)"
+   ]
+  },
+  {
+   "name": "Hay-like",
+   "category": "Green/Vegetative",
+   "intensity": 7.5,
+   "references": [
+    "McCormick Parsley Flakes"
+   ]
+  },
+  {
+   "name": "Herb-like",
+   "category": "Green/Vegetative",
+   "intensity": 5.0,
+   "references": [
+    "Mixture of McCormick Bay Leaves, McCormick Ground Thyme, and McCormick Basil Leaves",
+    "Mixture of McCormick Bay Leaves, McCormick Ground Thyme, and McCormick Basil Leaves"
+   ]
+  },
+  {
+   "name": "Beany",
+   "category": "Green/Vegetative",
+   "intensity": 7.5,
+   "references": [
+    "Bush’s Pinto Beans (canned)",
+    "Bush’s Pinto Beans (canned)"
+   ]
+  },
+  {
+   "name": "Stale",
+   "category": "Stale/Papery",
+   "intensity": 4.0,
+   "references": [
+    "Mama Mary’s Gourmet Original Pizza Crust",
+    "Mama Mary’s Gourmet Original Pizza Crust"
+   ]
+  },
+  {
+   "name": "Papery",
+   "category": "Stale/Papery",
+   "intensity": 2.5,
+   "references": [
+    "Pure Brew coffee filters",
+    "FlavorActiV “papery\" (trans-2-nonenal)"
+   ]
+  },
+  {
+   "name": "Cardboard",
+   "category": "Stale/Papery",
+   "intensity": 7.5,
+   "references": [
+    "Cardboard"
+   ]
+  },
+  {
+   "name": "Woody",
+   "category": "Earthy",
+   "intensity": 4.0,
+   "references": [
+    "Diamond Shelled Walnuts",
+    "Diamond Shelled Walnuts",
+    "Popsicle sticks"
+   ]
+  },
+  {
+   "name": "Musty/Earthy",
+   "category": "Earthy",
+   "intensity": 9.0,
+   "references": [
+    "Miracle-Gro Potting Mix soil",
+    "Le Nez du Café no. 1 “earthy”",
+    "FlavorActiV “wet earthy\" (2-ethyl fenchol)"
+   ]
+  },
+  {
+   "name": "Musty/Dusty",
+   "category": "Earthy",
+   "intensity": 5.0,
+   "references": [
+    "Kretschmer Wheat Germ",
+    "2, 3, 4 – Trimethoxybenzaldehyde",
+    "FlavorActiV “dry earth\" (geosmin)"
+   ]
+  },
+  {
+   "name": "Moldy/Damp",
+   "category": "Earthy",
+   "intensity": 6.0,
+   "references": [
+    "2-Ethyl-1-Hexanol 10,000 ppm",
+    "2,3,5,6 – Tetrachloroanisole",
+    "FlavorActiV “moldy-damp\" (2, 4, 6 trichloroanisole)"
+   ]
+  },
+  {
+   "name": "Phenolic",
+   "category": "Earthy",
+   "intensity": 6.0,
+   "references": [
+    "Phenylacetic acid",
+    "FlavorActiV “medicinal (o-cresol)\" (Methyl Phenol)"
+   ]
+  },
+  {
+   "name": "Animalic",
+   "category": "Earthy",
+   "intensity": 3.0,
+   "references": [
+    "Unflavored gelatin"
+   ]
+  },
+  {
+   "name": "Meaty/Brothy",
+   "category": "Earthy",
+   "intensity": null,
+   "references": []
+  },
+  {
+   "name": "Medicinal",
+   "category": "Chemical",
+   "intensity": 3.0,
+   "references": [
+    "Iodine",
+    "Alcohol",
+    "Le Nez du Café no. 35 “medicinal”",
+    "Band-Aid Plastic Strips adhesive bandage"
+   ]
+  },
+  {
+   "name": "Rubber",
+   "category": "Chemical",
+   "intensity": 5.0,
+   "references": [
+    "A&W Rubber Bands"
+   ]
+  },
+  {
+   "name": "Petroleum",
+   "category": "Chemical",
+   "intensity": 3.0,
+   "references": [
+    "Vaseline petroleum jelly",
+    "FlavorActiV “diesel/motor fuel\" (p-cymene)"
+   ]
+  },
+  {
+   "name": "Skunky",
+   "category": "Chemical",
+   "intensity": 2.5,
+   "references": [
+    "Latex balloon"
+   ]
+  },
+  {
+   "name": "Tobacco",
+   "category": "Roasted",
+   "intensity": 5.0,
+   "references": [
+    "Le Nez du Café no. 33 “pipe tobacco”",
+    "Camel cigarettes (Turkish and Domestic blend)",
+    "Cigar tobacco",
+    "Unscented pipe tobacco"
+   ]
+  },
+  {
+   "name": "Pipe Tobacco",
+   "category": "Roasted",
+   "intensity": 6.5,
+   "references": [
+    "Carter Hall Pipe Tobacco"
+   ]
+  },
+  {
+   "name": "Acrid",
+   "category": "Roasted",
+   "intensity": 3.0,
+   "references": [
+    "Alf’s Natural Nutrition Red Wheat Cereal",
+    "Alf’s Natural Nutrition Red Wheat Cereal",
+    "Wright’s Liquid Smoke Mesquite"
+   ]
+  },
+  {
+   "name": "Ashy",
+   "category": "Roasted",
+   "intensity": 3.5,
+   "references": [
+    "Gerkens 10/12 Midnight Black heavily alkalized cocoa powder",
+    "Gerkens 10/12 Midnight Black heavily alkalized cocoa powder",
+    "Benzyl disulfide",
+    "Paper ashes"
+   ]
+  },
+  {
+   "name": "Burnt",
+   "category": "Roasted",
+   "intensity": 7.5,
+   "references": [
+    "Benzyl disulfide",
+    "Raw peanuts, over-roasted/burnt",
+    "Alf’s Natural Nutrition Red Wheat Cereal",
+    "Alf’s Natural Nutrition Red Wheat Cereal"
+   ]
+  },
+  {
+   "name": "Smoky",
+   "category": "Roasted",
+   "intensity": 5.0,
+   "references": [
+    "Benzyl disulfide",
+    "Diamond Smoked Almonds",
+    "Diamond Smoked Almonds",
+    "Wood Ashes"
+   ]
+  },
+  {
+   "name": "Roasted",
+   "category": "Roasted",
+   "intensity": 2.5,
+   "references": [
+    "Raw blanched peanuts, lightly roasted",
+    "Raw blanched peanuts, medium-roasted",
+    "Raw blanched peanuts, dark-roasted",
+    "Raw blanched peanuts, over-roasted/burnt"
+   ]
+  },
+  {
+   "name": "Brown, Roast",
+   "category": "Roasted",
+   "intensity": 3.0,
+   "references": [
+    "Bush’s Pinto Beans (canned)",
+    "Bush’s Pinto Beans (canned)",
+    "C&H Pure Cane Sugar, Golden Brown",
+    "C&H Pure Cane Sugar, Golden Brown"
+   ]
+  },
+  {
+   "name": "Grain",
+   "category": "Cereal",
+   "intensity": 8.0,
+   "references": [
+    "Mixture of General Mills Rice Chex, General Mills Wheaties and Quaker Quick Oats cereals",
+    "Mixture of General Mills Rice Chex, General Mills Wheaties and Quaker Quick Oats cereals"
+   ]
+  },
+  {
+   "name": "Malt",
+   "category": "Cereal",
+   "intensity": 8.0,
+   "references": [
+    "Post Grape-Nuts cereal",
+    "Post Grape-Nuts cereal"
+   ]
+  },
+  {
+   "name": "Pungent",
+   "category": "Spices",
+   "intensity": 5.0,
+   "references": [
+    "Majestic Mountain Sage Orange Essential Oil, Brazil"
+   ]
+  },
+  {
+   "name": "Pepper",
+   "category": "Spices",
+   "intensity": 13.0,
+   "references": [
+    "McCormick Ground Black Pepper"
+   ]
+  },
+  {
+   "name": "Anise",
+   "category": "Spices",
+   "intensity": 7.5,
+   "references": [
+    "Tone’s Pure Anise Extract"
+   ]
+  },
+  {
+   "name": "Nutmeg",
+   "category": "Spices",
+   "intensity": 9.0,
+   "references": [
+    "McCormick Ground Nutmeg"
+   ]
+  },
+  {
+   "name": "Brown Spice",
+   "category": "Spices",
+   "intensity": 3.0,
+   "references": [
+    "Private Selection Cinnamon Sticks",
+    "Private Selection Nutmeg (whole) and Private Selection Clove (whole)",
+    "Ground cinnamon, allspice, nutmeg, and clove mixture",
+    "FlavorActiV “phenolic\" (4-vinyl guiacol)"
+   ]
+  },
+  {
+   "name": "Cinnamon",
+   "category": "Spices",
+   "intensity": 13.0,
+   "references": [
+    "McCormick Ground Cinnamon"
+   ]
+  },
+  {
+   "name": "Clove",
+   "category": "Spices",
+   "intensity": 6.5,
+   "references": [
+    "Le Nez du Café no. 7 “clove” n.7"
+   ]
+  },
+  {
+   "name": "Nutty",
+   "category": "Nutty",
+   "intensity": 7.5,
+   "references": [
+    "Le Nez du Café no. 29 “roasted hazelnuts”",
+    "Mixture of Diamond Sliced Almonds and Diamond Shelled Walnuts"
+   ]
+  },
+  {
+   "name": "Almond",
+   "category": "Nutty",
+   "intensity": 7.0,
+   "references": [
+    "Le Nez du Café no. 27 “roasted almonds”",
+    "FlavorActiV “almond\" (benzaldehyde)"
+   ]
+  },
+  {
+   "name": "Hazelnut",
+   "category": "Nutty",
+   "intensity": 3.5,
+   "references": [
+    "Le Nez du Café no. 29 “roasted hazelnuts”",
+    "McCormick Imitation Hazelnut Extract, in milk",
+    "McCormick Imitation Hazelnut Extract, in milk"
+   ]
+  },
+  {
+   "name": "Peanuts",
+   "category": "Nutty",
+   "intensity": 7.5,
+   "references": [
+    "Raw blanched bulk peanuts, roasted",
+    "Raw blanched bulk peanuts, roasted"
+   ]
+  },
+  {
+   "name": "Chocolate",
+   "category": "Cocoa",
+   "intensity": 7.5,
+   "references": [
+    "Nestle Toll House Semi-Sweet Chocolate Morsels",
+    "Nestle Toll House Semi-Sweet Chocolate Morsels"
+   ]
+  },
+  {
+   "name": "Cocoa",
+   "category": "Cocoa",
+   "intensity": 5.0,
+   "references": [
+    "Hershey’s Cocoa Powder Natural Unsweetened, in water",
+    "Hershey’s Cocoa Powder Natural Unsweetened, in water"
+   ]
+  },
+  {
+   "name": "Dark Chocolate",
+   "category": "Cocoa",
+   "intensity": 11.0,
+   "references": [
+    "Lindt Excellence 90% Cocoa Supreme Dark chocolate bar",
+    "Lindt Excellence 90% Cocoa Supreme Dark chocolate bar",
+    "Dove Promises Silky Smooth Dark Chocolate (individually wrapped bite-sized bars)"
+   ]
+  },
+  {
+   "name": "Molasses",
+   "category": "Sweet",
+   "intensity": 6.5,
+   "references": [
+    "Grandma’s Original Molasses, unsulphured",
+    "Grandma’s Original Molasses, unsulphured"
+   ]
+  },
+  {
+   "name": "Maple Syrup",
+   "category": "Sweet",
+   "intensity": 5.0,
+   "references": [
+    "Le Nez du Café no. 24 “maple syrup”",
+    "Maple Grove Farms Pure Maple Syrup Medium Amber"
+   ]
+  },
+  {
+   "name": "Brown Sugar",
+   "category": "Sweet",
+   "intensity": 5.0,
+   "references": [
+    "C&H Pure Cane Sugar, Golden Brown",
+    "C&H Pure Cane Sugar, Golden Brown"
+   ]
+  },
+  {
+   "name": "Caramelized",
+   "category": "Sweet",
+   "intensity": 2.5,
+   "references": [
+    "Le Nez du Café no. 25 “caramel”",
+    "C&H Pure Cane Sugar, Golden Brown",
+    "C&H Pure Cane Sugar, Golden Brown",
+    "Caramelized white table cane sugar"
+   ]
+  },
+  {
+   "name": "Honey",
+   "category": "Sweet",
+   "intensity": 6.5,
+   "references": [
+    "Busy Bee Pure Clover Honey",
+    "Busy Bee Pure Clover Honey"
+   ]
+  },
+  {
+   "name": "Vanilla",
+   "category": "Sweet",
+   "intensity": 3.0,
+   "references": [
+    "Le Nez du Café no. 10 “vanilla“",
+    "Spice Islands Bourbon Vanilla Bean",
+    "McCormick Pure Vanilla Extract, in whole milk"
+   ]
+  },
+  {
+   "name": "Vanillin",
+   "category": "Sweet",
+   "intensity": 6.0,
+   "references": [
+    "Fisher Scientific Vanillin",
+    "FlavorActiV “vanilla\" (vanillin)"
+   ]
+  },
+  {
+   "name": "Sweet Aromatics",
+   "category": "Sweet",
+   "intensity": 5.0,
+   "references": [
+    "Fisher Scientific Vanillin",
+    "Fisher Scientific Vanillin",
+    "Nabisco Lorna Doone cookies"
+   ]
+  },
+  {
+   "name": "Overall Sweet",
+   "category": "Sweet",
+   "intensity": 1.5,
+   "references": [
+    "Post Shredded Wheat",
+    "General Mills Wheaties",
+    "Nabisco Lorna Doone Cookies"
+   ]
+  },
+  {
+   "name": "Floral",
+   "category": "Floral",
+   "intensity": 5.0,
+   "references": [
+    "Welch’s 100% White Grape juice",
+    "Welch’s 100% White Grape juice",
+    "Carnation essence oil",
+    "Le Nez du Café n.12 “coffee blossom”",
+    "FlavorActiV “rose/floral\" (geraniol)"
+   ]
+  },
+  {
+   "name": "Rose",
+   "category": "Floral",
+   "intensity": 5.0,
+   "references": [
+    "Rose water"
+   ]
+  },
+  {
+   "name": "Jasmine",
+   "category": "Floral",
+   "intensity": 8.5,
+   "references": [
+    "Jasmine extract",
+    "FlavorActiV “indole”"
+   ]
+  },
+  {
+   "name": "Chamomile",
+   "category": "Floral",
+   "intensity": 5.0,
+   "references": [
+    "Celestial Seasonings Chamomile Tea",
+    "Celestial Seasonings Chamomile Tea"
+   ]
+  },
+  {
+   "name": "Black Tea",
+   "category": "Floral",
+   "intensity": 7.0,
+   "references": [
+    "Lipton Black Tea",
+    "Lipton Black Tea"
+   ]
+  },
+  {
+   "name": "Overall Impact",
+   "category": "Amplitude",
+   "intensity": 7.5,
+   "references": [
+    "Gevalia Kaffe Traditional Roast, ground",
+    "Folgers Classic Roast Coffee, ground",
+    "Folgers Classic Roast, instant coffee crystals"
+   ]
+  },
+  {
+   "name": "Blended",
+   "category": "Amplitude",
+   "intensity": 3.0,
+   "references": [
+    "Folgers Classic Roast, instant coffee crystals",
+    "Folgers Classic Roast Coffee, ground",
+    "Gevalia Kaffe Traditional Roast, ground"
+   ]
+  },
+  {
+   "name": "Longevity",
+   "category": "Amplitude",
+   "intensity": 7.5,
+   "references": [
+    "Gevalia Kaffe Traditional Roast, ground",
+    "Folgers Classic Roast Coffee, ground",
+    "Folgers Classic Roast, instant coffee crystals"
+   ]
+  },
+  {
+   "name": "Body/Fullness",
+   "category": "Amplitude",
+   "intensity": 5.0,
+   "references": [
+    "Folgers Classic Roast, instant coffee crystals",
+    "Folgers Classic Roast Coffee, ground",
+    "Gevalia Kaffe Traditional Roast, ground"
+   ]
+  },
+  {
+   "name": "Mouth Drying",
+   "category": "Mouthfeel",
+   "intensity": 2.5,
+   "references": [
+    "0.05% alum solution",
+    "0.07% alum solution"
+   ]
+  },
+  {
+   "name": "Thickness",
+   "category": "Mouthfeel",
+   "intensity": 2.0,
+   "references": [
+    "5% sucrose solution",
+    "Campbell’s Tomato Juice"
+   ]
+  },
+  {
+   "name": "Metallic",
+   "category": "Mouthfeel",
+   "intensity": 1.5,
+   "references": [
+    "0.10% potassium chloride solution"
+   ]
+  },
+  {
+   "name": "Oily",
+   "category": "Mouthfeel",
+   "intensity": 3.0,
+   "references": [
+    "Horizon Organic Low-Fat (1%) ultrapasteurized milk",
+    "Kroger Half & Half"
+   ]
+  }
+ ]
+}

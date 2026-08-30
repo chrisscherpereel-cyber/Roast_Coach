@@ -252,6 +252,54 @@ The peak is measured from the turning point, where the roast actually starts.
 
 ---
 
+## The library
+
+Six sources sit in `library/`, read at startup rather than compiled in — adding one
+is dropping a file beside the others and adding a line to `index.json`.
+
+| Source | Kind | Good for |
+| --- | --- | --- |
+| Münchow, *Roasting Foundation* (2018) | teaching text citing peer-reviewed work | colour, development, why two machines' probes disagree |
+| Hoos, *Modulating the Flavor Profile of Coffee* (2015) | practitioner experiment, blind panel | Maillard time and body, development time and acidity |
+| Brault, *The Coffee Roaster's Handbook* | practitioner handbook | roast levels, green defects, roast faults |
+| Kornman, *The Coffee Fermentation Flavor Continuum* (2024) | trade literature | processing method and the cup |
+| World Coffee Research, *Sensory Lexicon* 2.0 | reference standard | 109 flavour attributes in 17 categories |
+| World Coffee Research, *Varieties Catalog* | reference standard | 117 varieties: lineage, altitude, bean size, resistance |
+
+Each roasting and processing source is summarised to one shape — claim, mechanism,
+**evidence**, numbers, page — and the evidence line is the one that matters. It is the
+difference between "a blind panel over four coffees found this" and "a roaster believes
+this", and the app grades its own findings from it.
+
+**What a source does not say is recorded too**, and it turned out to matter: *not one of
+the three roasting texts mentions the rate-of-rise crash*, and two never mention rate of
+rise at all. This app has plenty to say about crashes. It now says where that comes from —
+practitioner convention — rather than borrowing the authority of a book that is silent on
+the subject. The one number here resting on peer-reviewed work is Münchow's: colour
+accounts for roughly 80% of sensory variation and timing roughly 20%.
+
+The vocabulary and the varieties are not just reading. Type a variety on a bean and the
+catalogue answers with its group, stature, bean size and the altitude it wants; the
+tasting-notes field offers the Lexicon's 109 attributes, so *papery* and *cereal* mean
+what a trained panel means by them.
+
+**Rights.** Nothing reproduces anybody's prose. The variety catalogue is WCR's data under
+CC BY-NC-ND, included with their licence text and attribution for noncommercial use. The
+Sensory Lexicon carries no licence at all — only *"all rights reserved"* — so this
+repository has its attribute names, categories and reference intensities, which are facts
+about a measuring instrument, and not WCR's definitions, which are their writing. To have
+those in your own copy:
+
+```bash
+python3 tools/import_lexicon.py ~/Downloads/wcr-sensory-lexicon.pdf
+```
+
+That reads the PDF WCR publishes free, writes the definitions somewhere private, and they
+appear throughout the app. `library/README.md` has the full terms and
+`tools/permission-request.md` is a note you can send WCR if you would rather ship them.
+
+---
+
 ## What the app is willing to say
 
 Roasting software has a habit of reading a curve and announcing a taste. This one will not.
@@ -394,6 +442,8 @@ roastcoach/
   origin.py                 the coffee's country, read from the roast name
   demo_data.py              a simulated roasting history
 password_tool.html          makes account lines for secrets, entirely in the browser
+library/                    the six sources, read at startup — see library/README.md
+tools/import_lexicon.py     puts your own copy of WCR's definitions where the app reads them
 mac/                        everything that runs on the Mac that roasts
   sync_app.py               the sync as a page: a Sync now button, and what arrived
   roast-sync-app.command    double-click to open that page
