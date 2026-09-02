@@ -150,12 +150,24 @@ both in about fifteen minutes**:
   Supabase project does it — and every computer signed in sees the same roasts. This also
   fixes something easy to miss: Streamlit Community Cloud wipes its own disk on every
   restart, so without this, roasts imported today are gone tomorrow.
-- **A sign-in.** `[passwords]` in secrets holds one PBKDF2 hash per person. With no accounts
-  set up, the app makes the first one for you: it asks for a name and password and prints
-  the two lines to paste into secrets. `password_tool.html` in any browser and
+- **A sign-in.** `[passwords]` in secrets holds the founding account as a PBKDF2 hash. With
+  no accounts set up, the app makes that one for you: it asks for a name and password and
+  prints the two lines to paste into secrets. `password_tool.html` in any browser and
   `make_login.py` in a terminal do the same job. Nothing behind the sign-in renders for
   anyone who has not signed in, so the repository and the app URL can both stay public while
   the roasts stay yours.
+
+Everybody after the first is added **from inside the app**, on **Setup → People**: a name, a
+password, and whether they are an admin or a roaster. Those accounts live in the database, so
+an admin can hand somebody a login without going near the app's settings — and can reset a
+password, suspend an account, or take it away again. A **roaster** does everything the app
+does with roasts; an **admin** can also manage people. Everyone can change their own password.
+
+The account in secrets is deliberately different from the rest: the app cannot edit it, which
+makes it the way back in if everything else goes wrong. Because it also cannot *rename* it,
+the first time you sign in the app writes an **`admin`** account carrying the very same
+password. Sign in as `admin` from then on, and once you are happy it works, delete the old
+line from secrets — leaving it there is a second door with the same key.
 
 Neither secret is in the repository, and the app tells you on the **Data** page which
 database it is actually using — so a misconfigured deploy announces itself instead of
@@ -233,8 +245,9 @@ moved it 1.9 °C/min in your roasts; that is one step.* Where the app has not le
 yet it says `assumed` and uses a starting figure until your roasts replace it.
 
 A plan leaves three ways: **on screen** step by step, as a **RoasTime recipe file** in
-their own format to import on the machine, and as a **printable one-pager** with blanks for
-what actually happened. Nothing is ever written into RoasTime's folder.
+their own format to import on the machine, and as a **one-page PDF** — the steps, where each
+number came from, and blanks for what actually happened — to print and keep beside the
+roaster. Nothing is ever written into RoasTime's folder.
 
 And a plan is kept. **Save it and the app grades it** against the roast you run from it —
 planned drop against actual, planned time against actual, planned level against what you
@@ -495,7 +508,7 @@ roastcoach/
   design.py                 building a roast that has not happened yet
   frontend/curve/           the draggable rate-of-rise editor
   knowledge.py              the six sources in library/, and what each is silent on
-  auth.py                   who is allowed in
+  auth.py                   who is allowed in, and who may let others in
   uploader.py, frontend/    the drop box, and an optional watched folder
   fields.py, csv_import.py  reading RoasTime's two formats
   origin.py                 the coffee's country, read from the roast name

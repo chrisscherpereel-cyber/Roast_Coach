@@ -848,6 +848,19 @@ _sheet = design.as_sheet(_dark)
 check("What actually happened" in _sheet and "IBTS" in _sheet,
       "and as a page to have beside the roaster, with blanks for what actually happened")
 
+# The one-pager is carried to the machine and written on, so it has to print the
+# same everywhere — which is what the PDF is for.
+_pdf = design.as_pdf(_dark)
+check(_pdf[:5] == b"%PDF-" and len(_pdf) > 1500,
+      "that page prints as a real PDF", f"{len(_pdf):,} bytes")
+_read = _pdf.decode("latin-1")
+check("Roast Coach" in _read or b"Roast Coach" in _pdf,
+      "with the app's name in the footer of every page")
+check(design.sheet_name(_dark).endswith(".pdf") and " " not in design.sheet_name(_dark),
+      "and a file name that survives a downloads folder", design.sheet_name(_dark))
+check(design.as_pdf(design.blank("Nothing known", 500, "City"))[:5] == b"%PDF-",
+      "even for a plan built from nothing, where half the numbers are blank")
+
 # The loop: a plan is a hypothesis, and one nobody checks is an opinion.
 _plan_id = store.save_plan(_dark, "Test French")
 check(_plan_id and len(store.open_plans()) >= 1,
@@ -1193,6 +1206,92 @@ check(auth.hash_password("same") != auth.hash_password("same"),
       "two accounts with the same password get different hashes")
 check(auth.accounts() == {"tester": "roast-coach-test"}, "accounts are read from the environment")
 check(auth.weak_accounts() == ["tester"], "an unhashed password in secrets is called out")
+
+print("\nGIVING SOMEBODY ELSE A LOGIN")
+# The founding account lives in secrets, which the app cannot write to. It seeds
+# a database row called `admin` carrying the same hash, so the name on the door
+# changes without the password changing and without anybody editing settings.
+check(auth.role_of("tester") == "admin", "an account in the app's settings is an admin")
+check(auth.seed_admin("tester"), "signing in from settings makes an `admin` account")
+check(auth.accounts().get(auth.ADMIN) == auth.founders()["tester"],
+      "carrying the very same password — nothing new to remember")
+check(not auth.seed_admin("tester"), "and doing it twice changes nothing")
+
+check(auth.add_account("sam", "another good password", "roaster", "Sam Ortiz", "admin") == "",
+      "an admin can make somebody an account from inside the app")
+check(auth.verify("another good password", auth.accounts()["sam"]),
+      "which is a real sign-in, hashed like any other")
+check(auth.role_of("sam") == "roaster", "and is a roaster unless told otherwise")
+check(auth.add_account("sam", "yet another password") != "",
+      "the same name cannot be handed out twice")
+check(auth.add_account("sam two", "yet another password") != "",
+      "and a name with a space in it is refused, because it is typed at a sign-in")
+check(auth.add_account("kit", "short") != "", "a short password is refused")
+
+check(auth.set_password("sam", "a replacement password", "admin") == ""
+      and auth.verify("a replacement password", auth.accounts()["sam"]),
+      "an admin can reset a password without knowing the old one")
+check(auth.set_active("sam", False) == "" and "sam" not in auth.accounts(),
+      "suspending an account stops it signing in")
+check(auth.role_of("sam") == "roaster" and "sam" in auth.stored_accounts(),
+      "without deleting the person, so it can be undone")
+check(auth.set_active("sam", True) == "" and "sam" in auth.accounts(),
+      "and undoing it lets them back in")
+
+check(auth.set_role("sam", "admin") == "" and auth.is_admin("sam"),
+      "an admin can make somebody else an admin")
+check(auth.set_role("sam", "wizard") != "", "and cannot invent a role")
+check(auth.remove_account("sam") == "" and "sam" not in auth.accounts(),
+      "and can remove an account for good")
+check(auth.remove_account("tester") != "",
+      "but not one that lives in the app's settings — that is the way back in")
+
+# Nobody in settings, one admin in the database: the app must not let that admin
+# lock everybody out of the app for good.
+_founders = os.environ.pop("ROAST_COACH_PASSWORDS", None)
+check(not auth.founders(), "with nothing in the app's settings")
+check(auth.set_role(auth.ADMIN, "roaster") != "",
+      "the last admin cannot demote themselves")
+check(auth.set_active(auth.ADMIN, False) != "", "nor suspend themselves")
+check(auth.remove_account(auth.ADMIN) != "", "nor remove themselves")
+check(auth.add_account("kit", "a perfectly good password", "admin") == ""
+      and auth.set_role(auth.ADMIN, "roaster") == "",
+      "once there is a second admin, the first is free to step down")
+auth.remove_account("kit")
+db.run("DELETE FROM accounts")
+if _founders:
+    os.environ["ROAST_COACH_PASSWORDS"] = _founders
+check(auth.accounts() == {"tester": "roast-coach-test"},
+      "and the accounts table starts empty again for the rest of the tests")
+
+# The screen it is all done on. An admin is offered the making and unmaking of
+# people; a roaster is offered their own password and nothing else.
+from streamlit.testing.v1 import AppTest as _AppTest  # noqa: E402
+
+os.environ["ROAST_COACH_PAGE"] = "Setup"
+auth.add_account("sam", "another good password", "roaster", "Sam Ortiz", "tester")
+_boss = _AppTest.from_file("app.py", default_timeout=300)
+_boss.session_state[auth.SESSION_KEY] = "tester"
+_boss.run()
+check(not _boss.exception, "the People tab opens",
+      str(_boss.exception[0].message)[:160] if _boss.exception else "")
+_boss_fields = {field.label for field in _boss.text_input}
+check("Name to sign in with" in _boss_fields and "A password for them" in _boss_fields,
+      "an admin is offered the form that gives somebody a login")
+check(any("sam" in str(box.value) for box in _boss.selectbox
+          if box.label == "Who"), "and can pick anybody else to change")
+
+_hand = _AppTest.from_file("app.py", default_timeout=300)
+_hand.session_state[auth.SESSION_KEY] = "sam"
+_hand.run()
+_hand_fields = {field.label for field in _hand.text_input}
+check(not _hand.exception and "Name to sign in with" not in _hand_fields,
+      "while a roaster is not — nobody is handed a door they were not given")
+check("New password" in _hand_fields,
+      "though they can always change their own password")
+auth.remove_account("sam")
+db.run("DELETE FROM accounts")
+os.environ.pop("ROAST_COACH_PAGE", None)
 
 print("\nTHE APP")
 from streamlit.testing.v1 import AppTest  # noqa: E402

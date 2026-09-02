@@ -100,32 +100,56 @@ paste, **Save**. The app restarts by itself.
 url = "postgresql://postgres.abcdefghijklmnop:your-password@aws-1-us-east-2.pooler.supabase.com:5432/postgres"
 
 [passwords]
-chris = "pbkdf2_sha256$240000$k9Fs…$Qm1a…"
-sam   = "pbkdf2_sha256$240000$2bXt…$7dLp…"
+admin = "pbkdf2_sha256$240000$k9Fs…$Qm1a…"
 ```
+
+One line is all you need here. This is the founding account — the app cannot edit it,
+which is what makes it the way back in if anything else goes wrong. Everybody else is
+added from inside the app, in step 4.
 
 Open the app. It should ask you to sign in, and the **Data** page should say
 *Postgres* under "Where this is stored". If it still says SQLite, the `[database]`
 section did not take — check for a typo in the section name.
 
+The first time you sign in, the app writes an **`admin`** account carrying the same
+password as the line above. Sign in as `admin` from then on. Once you are happy it
+works, delete the old line from secrets — leaving it there is a second door with the
+same key.
+
 ---
 
 ## 4. Everyone else
 
-Send them the app's URL and their own name and password. Nothing to install.
-Each person signs in on their own computer and sees the same roasts; whoever
-imports a roast is recorded against it.
+On **Setup → People**, give each person a name to sign in with and a password, and
+choose what they can do:
+
+- **roaster** — everything the app does with roasts: import, edit, plan, grade.
+- **admin** — that, and the making and unmaking of people.
+
+Send them the app's URL and the name and password you set. Nothing to install. Each
+person signs in on their own computer and sees the same roasts; whoever imports a
+roast is recorded against it. They can change their own password once they are in;
+the app never shows you theirs, because it never keeps it.
 
 ---
 
 ## Adding and removing people
 
-Add a line to `[passwords]`, or delete one. Removing a line locks that person out
-the moment the app restarts. Anyone signed in can import roasts and edit them, so
-only hand out accounts you would trust with the data.
+All on **Setup → People**, as an admin:
 
-If a password gets out: change that line, save, done — the old one stops working
-immediately.
+- **Reset a password** if somebody forgets theirs, or if one gets out. The old one
+  stops working immediately.
+- **Suspend** an account to stop it signing in while keeping everything it recorded.
+  It can be turned back on.
+- **Remove** an account for good. Suspending is almost always the better answer:
+  a removed person's name still sits on every roast and note they recorded.
+
+The app will not let the last admin demote, suspend or remove themselves — somebody
+has to be able to get in. An account in secrets always counts as that somebody, which
+is why keeping one there is not a bad idea even after you stop using it.
+
+Anyone signed in can import roasts and edit them, so only hand out accounts you would
+trust with the data.
 
 ---
 
@@ -182,6 +206,14 @@ first account for you: fill in a name and password, press **Make the line to
 paste**, and put the result in secrets as in step 3. On a local database only, it
 additionally offers "Continue without signing in"; on a shared one it does not, on
 purpose.
+
+**Somebody you added cannot sign in** — check **Setup → People**. An account
+showing *suspended* is switched off; press **Let back in**. If they are not listed
+at all, the app is on a different database from the one you added them to, which
+the **Data** page will tell you.
+
+**No People tab** — the deploy is running an older `roastcoach/auth.py` than
+`app.py`. The **Data** page names every file it actually read and which are behind.
 
 **Everything is slow the first time each morning** — Supabase pausing an idle
 free project. It wakes on the first connection.

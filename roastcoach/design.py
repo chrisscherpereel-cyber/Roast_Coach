@@ -41,7 +41,7 @@ from . import knowledge, learning
 #   1  plans from a roast or from nothing; roast level and batch size transforms;
 #      RoasTime export
 #   2  the plan as a curve you can pull about, and the recipe that follows from it
-VERSION = 2
+VERSION = 3
 
 CONTROLS = ("power", "fan", "drum")
 
@@ -745,6 +745,179 @@ def as_sheet(plan: dict) -> str:
         "and the app will tell you whether it held.*",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The same page, printed
+# ---------------------------------------------------------------------------
+
+# The one-pager exists to be carried to the roaster and written on, so it has to
+# print the same everywhere — which markdown does not. This is the same content
+# laid out on a real page. Nothing is computed here that :func:`as_sheet` does
+# not compute; if the two ever disagree, the plan is the thing to trust.
+
+PAGE_INK = "#1B1613"
+PAGE_QUIET = "#6B6259"
+PAGE_RULE = "#D8D0C7"
+PAGE_ORANGE = "#E8622A"
+PAGE_BAND = "#F4EFE9"
+
+
+def _escape(value) -> str:
+    """Text safe to hand a reportlab Paragraph, which reads a little XML."""
+    return (str("" if value is None else value)
+            .replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
+def as_pdf(plan: dict) -> bytes:
+    """The one-pager as a PDF, ready to print and write on."""
+    from io import BytesIO
+
+    from reportlab.lib import colors
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.lib.pagesizes import LETTER
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import inch
+    from reportlab.platypus import (KeepTogether, Paragraph, SimpleDocTemplate,
+                                    Spacer, Table, TableStyle)
+
+    ink, quiet = colors.HexColor(PAGE_INK), colors.HexColor(PAGE_QUIET)
+    rule, band = colors.HexColor(PAGE_RULE), colors.HexColor(PAGE_BAND)
+
+    def style(name, size, leading, colour=ink, font="Helvetica", space=0, after=0):
+        return ParagraphStyle(name, fontName=font, fontSize=size, leading=leading,
+                              textColor=colour, spaceBefore=space, spaceAfter=after,
+                              alignment=TA_LEFT)
+
+    title = style("title", 19, 22, font="Helvetica-Bold", after=2)
+    sub = style("sub", 9.5, 13, quiet, after=0)
+    heading = style("heading", 11, 13, font="Helvetica-Bold", space=14, after=5)
+    body = style("body", 9, 12)
+    small = style("small", 8, 10.5, quiet)
+    cell = style("cell", 8.5, 11)
+    cell_bold = style("cellbold", 8.5, 11, font="Helvetica-Bold")
+    head_cell = style("head", 7.5, 10, quiet, font="Helvetica-Bold")
+
+    charge = plan.get("charge") or {}
+    drop = plan.get("drop") or {}
+    weight = f"{float(plan['weight']):.0f} g" if plan.get("weight") else "—"
+    crack = f"{float(drop['first_crack']):.1f} min" if drop.get("first_crack") else "—"
+    total = f"{float(drop['expect_minutes']):.1f} min" if drop.get("expect_minutes") else "—"
+
+    flow = [
+        Paragraph(_escape(_name(plan)), title),
+        Paragraph(
+            f"{_escape(plan.get('level') or '—')} &nbsp;·&nbsp; {weight} &nbsp;·&nbsp; "
+            f"built from {_escape(plan.get('from_label') or 'the library, not a roast')}",
+            sub),
+        Spacer(1, 9),
+        Paragraph(
+            "Every temperature below is an <b>IBTS</b> reading. This plan is only as "
+            f"good as its weakest part, which is: <b>{_escape(confidence(plan))}</b>.",
+            body),
+    ]
+
+    # The roast itself.
+    steps = [[Paragraph(text, head_cell)
+              for text in ("IBTS", "DO", "WHY", "RESTING ON")]]
+    for _, row in as_table(plan).iterrows():
+        doing = (f"{row['control']} {row['set to']}".strip()
+                 if row["control"] not in ("charge", "drop")
+                 else (row["set to"] or row["control"]))
+        was = f"  {row['was']}" if row["was"] else ""
+        steps.append([
+            Paragraph(_escape(row["IBTS"]), cell_bold),
+            Paragraph(_escape(doing + was), cell),
+            Paragraph(_escape(row["why"]), cell),
+            Paragraph(_escape(row["from"]), small),
+        ])
+
+    plan_table = Table(steps, colWidths=[0.72 * inch, 1.85 * inch, 3.05 * inch, 0.88 * inch],
+                       repeatRows=1, hAlign="LEFT")
+    plan_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.9, ink),
+        ("LINEBELOW", (0, 1), (-1, -2), 0.4, rule),
+        ("BACKGROUND", (0, 1), (-1, 1), band),
+        ("BACKGROUND", (0, -1), (-1, -1), band),
+        ("LINEABOVE", (0, -1), (-1, -1), 0.9, colors.HexColor(PAGE_ORANGE)),
+    ]))
+    flow += [Paragraph("The roast", heading), plan_table]
+
+    # Where each number comes from.
+    provenance = plan.get("provenance") or []
+    if provenance:
+        items = []
+        for item in provenance:
+            items.append(Paragraph(
+                f"<b>{_escape(item.get('what'))}</b> — <i>{_escape(item.get('basis'))}</i>. "
+                f"{_escape(item.get('detail'))}", body))
+            items.append(Spacer(1, 3))
+        flow += [Paragraph("Where each number comes from", heading)] + items
+
+    # Room to write.
+    blanks = [[Paragraph(text, head_cell) for text in ("", "PLANNED", "ACTUAL")]]
+    for label, planned in (("Charge IBTS", _degrees(charge.get("ibts"))),
+                           ("First crack", crack),
+                           ("Drop IBTS", _degrees(drop.get("ibts"))),
+                           ("Total time", total),
+                           ("Weight out", ""),
+                           ("Colour", ""),
+                           ("Notes", "")):
+        blanks.append([Paragraph(_escape(label), cell_bold),
+                       Paragraph(_escape(planned), cell), ""])
+
+    written = Table(blanks, colWidths=[1.25 * inch, 1.25 * inch, 4.0 * inch],
+                    rowHeights=[14] + [22] * 6 + [46], hAlign="LEFT")
+    written.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.9, ink),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.4, rule),
+        ("BACKGROUND", (2, 1), (2, -1), band),
+    ]))
+    flow += [KeepTogether([Paragraph("What actually happened", heading), written])]
+
+    flow += [
+        Spacer(1, 12),
+        Paragraph(
+            "Built by Roast Coach. A plan is a hypothesis: roast it, record what "
+            "happened, and the app will tell you whether it held.", small),
+    ]
+
+    def furniture(canvas, document):
+        canvas.saveState()
+        canvas.setStrokeColor(rule)
+        canvas.setLineWidth(0.4)
+        canvas.line(0.7 * inch, 0.62 * inch, LETTER[0] - 0.7 * inch, 0.62 * inch)
+        canvas.setFont("Helvetica", 7.5)
+        canvas.setFillColor(quiet)
+        canvas.drawString(0.7 * inch, 0.45 * inch, "Roast Coach")
+        canvas.drawRightString(LETTER[0] - 0.7 * inch, 0.45 * inch,
+                               f"page {document.page}")
+        canvas.restoreState()
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer, pagesize=LETTER,
+        leftMargin=0.7 * inch, rightMargin=0.7 * inch,
+        topMargin=0.68 * inch, bottomMargin=0.78 * inch,
+        title=_name(plan), author="Roast Coach", subject="Roast plan")
+    document.build(flow, onFirstPage=furniture, onLaterPages=furniture)
+    return buffer.getvalue()
+
+
+def sheet_name(plan: dict, extension: str = "pdf") -> str:
+    """A file name for the one-pager that reads as what it is."""
+    stem = "".join(character if character.isalnum() or character in " -_" else ""
+                   for character in _name(plan)).strip()
+    stem = "-".join(part for part in stem.split() if part).lower() or "roast-plan"
+    return f"{stem}.{extension}"
 
 
 # ---------------------------------------------------------------------------

@@ -2,18 +2,32 @@
 Who is allowed in.
 
 The app is public — the repository is public and anyone can open the URL — but
-the roasts behind it are not. Everything is gated on a sign-in, and the accounts
-live in Streamlit secrets rather than in the code, so the repository can stay
-open without giving anything away.
+the roasts behind it are not. Everything is gated on a sign-in.
 
-Passwords are never stored. What is stored is a PBKDF2-SHA256 hash of the
-password with a per-account salt, which is what ``make_login.py`` prints:
+Accounts come from two places, and the difference between them matters.
+
+**Streamlit secrets** hold the founding account. Secrets cannot be written from
+inside the app — on Streamlit Cloud they are read-only, and that is the point of
+them — so an account there is the one nobody can lock themselves out of and
+nobody inside the app can touch. Anyone in secrets is an admin::
 
     [passwords]
-    chris = "pbkdf2_sha256$240000$9f3c…$1a2b…"
+    admin = "pbkdf2_sha256$240000$9f3c…$1a2b…"
 
-Add an account by adding a line. Remove one by deleting it. Anyone signed in can
-import roasts and edit them, and their name is recorded against what they change.
+**The database** holds everybody else. An admin adds a person on the People tab
+and the account lands here, so the admin can give somebody a login without going
+near the app's settings. The first time an admin signs in from secrets, a
+matching ``admin`` row is written to the database carrying the same hash, so the
+name on the door becomes ``admin`` whatever the secrets line happens to say.
+
+Passwords are never stored anywhere. What is stored is a PBKDF2-SHA256 hash with
+a per-account salt, which is what ``make_login.py`` prints. A hash gives nothing
+away: it cannot be turned back into the password.
+
+Two roles. An **admin** can add, suspend and remove people and reset passwords.
+A **roaster** can do everything else the app does — import, edit, plan, grade.
+There is deliberately no read-only role: everyone signed in is trusted with the
+roasts, and their name is recorded against what they change.
 """
 
 from __future__ import annotations
@@ -23,6 +37,7 @@ import hmac
 import os
 import time
 from base64 import b64decode, b64encode
+from datetime import datetime, timezone
 
 import streamlit as st
 
@@ -32,6 +47,20 @@ SESSION_KEY = "roast_coach_user"
 ATTEMPTS_KEY = "roast_coach_attempts"
 MAX_ATTEMPTS = 6
 LOCKOUT_SECONDS = 60
+
+# What this file can do — see the note in store.py.
+#   1  accounts in Streamlit secrets
+#   2  accounts in the database too, with roles, added by an admin from inside
+#      the app; the founding secrets account is seeded as `admin`
+VERSION = 2
+
+# The name the founding account is given in the database. Everything else about
+# an account can change; this one name is what the app looks for when it asks
+# whether anybody is in charge yet.
+ADMIN = os.environ.get("ROAST_COACH_ADMIN", "admin")
+
+ROLES = ("admin", "roaster")
+MIN_PASSWORD = 8
 
 
 # ---------------------------------------------------------------------------
@@ -69,8 +98,11 @@ def verify(password: str, stored: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def accounts() -> dict:
-    """``{name: stored hash}`` from secrets, or from the environment for tests."""
+def founders() -> dict:
+    """``{name: stored hash}`` from secrets, or from the environment for tests.
+
+    These are the accounts the app cannot edit, and everyone in here is an admin.
+    """
     from_env = os.environ.get("ROAST_COACH_PASSWORDS")
     if from_env:
         pairs = [entry.split(":", 1) for entry in from_env.split(",") if ":" in entry]
@@ -81,12 +113,75 @@ def accounts() -> dict:
         return {}
 
 
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def people(include_suspended: bool = True) -> list[dict]:
+    """Every account in the database, newest names last.
+
+    A database that cannot be reached is not a reason to refuse everybody at the
+    door: the founding accounts still work, so this returns nothing and says
+    nothing rather than raising.
+    """
+    from . import db
+
+    try:
+        rows = db.frame("SELECT username, password, role, display_name, active, "
+                        "created_at, created_by, changed_at, last_seen "
+                        "FROM accounts ORDER BY username")
+    except Exception:
+        return []
+    found = rows.to_dict("records") if rows is not None and not rows.empty else []
+    if include_suspended:
+        return found
+    return [row for row in found if int(row.get("active") or 0)]
+
+
+def stored_accounts() -> dict:
+    """``{name: row}`` for the accounts the app itself keeps."""
+    return {str(row["username"]): row for row in people()}
+
+
+def accounts() -> dict:
+    """``{name: stored hash}`` for everybody who may sign in.
+
+    A database row of the same name wins over secrets, so an admin who changes
+    their own password inside the app is not overruled by an old secrets line.
+    Suspended accounts are absent, which is what suspension means.
+    """
+    merged = dict(founders())
+    for name, row in stored_accounts().items():
+        if int(row.get("active") or 0):
+            merged[name] = str(row.get("password") or "")
+        else:
+            merged.pop(name, None)
+    return {name: value for name, value in merged.items() if value}
+
+
+def role_of(name: str | None) -> str:
+    """``admin`` or ``roaster``. Anybody in secrets is an admin."""
+    if not name:
+        return ""
+    clean = str(name).strip()
+    row = stored_accounts().get(clean)
+    if row and int(row.get("active") or 0):
+        return str(row.get("role") or "roaster")
+    if clean in founders() or clean == "local":
+        return "admin"
+    return "roaster"
+
+
+def is_admin(name: str | None = None) -> bool:
+    return role_of(name if name is not None else current_user()) == "admin"
+
+
 def configured() -> bool:
     return bool(accounts())
 
 
 def weak_accounts() -> list[str]:
-    """Accounts whose password is sitting in secrets in the clear."""
+    """Accounts whose password is sitting somewhere in the clear."""
     return sorted(name for name, stored in accounts().items()
                   if not str(stored).startswith(ALGORITHM + "$"))
 
@@ -97,6 +192,166 @@ def current_user() -> str | None:
 
 def sign_out() -> None:
     st.session_state.pop(SESSION_KEY, None)
+
+
+# ---------------------------------------------------------------------------
+# Managing people
+# ---------------------------------------------------------------------------
+
+
+def trouble_with(password: str, again: str | None = None) -> str:
+    """Why a password will not do, or an empty string if it will."""
+    if not password:
+        return "A password, please."
+    if again is not None and password != again:
+        return "Those two passwords are not the same."
+    if len(password) < MIN_PASSWORD:
+        return (f"{MIN_PASSWORD} characters or more — this is the only thing between "
+                "the internet and your roasts.")
+    return ""
+
+
+def add_account(name: str, password: str, role: str = "roaster",
+                display_name: str = "", by: str = "") -> str:
+    """Make an account. Returns an empty string, or why it could not be made."""
+    from . import db
+
+    clean = str(name).strip()
+    if not clean:
+        return "A name to sign in with, please."
+    if any(character.isspace() for character in clean):
+        return "No spaces in a sign-in name — use the full name field for that."
+    if clean in accounts() or clean in stored_accounts():
+        return f"There is already an account called {clean}."
+    wrong = trouble_with(password)
+    if wrong:
+        return wrong
+    db.upsert("accounts", "username", {
+        "username": clean, "password": hash_password(password),
+        "role": role if role in ROLES else "roaster",
+        "display_name": str(display_name or "").strip() or None,
+        "active": 1, "created_at": _now(), "created_by": by or None,
+        "changed_at": _now(), "last_seen": None})
+    return ""
+
+
+def set_password(name: str, password: str, by: str = "") -> str:
+    """Change somebody's password, including your own."""
+    from . import db
+
+    clean = str(name).strip()
+    wrong = trouble_with(password)
+    if wrong:
+        return wrong
+    if clean not in stored_accounts():
+        # An account that only exists in secrets cannot be edited from here, so
+        # give it a database row of its own carrying the new password.
+        if clean not in founders():
+            return f"There is no account called {clean}."
+        db.upsert("accounts", "username", {
+            "username": clean, "password": hash_password(password), "role": "admin",
+            "display_name": None, "active": 1, "created_at": _now(),
+            "created_by": by or None, "changed_at": _now(), "last_seen": None})
+        return ""
+    db.run("UPDATE accounts SET password = :password, changed_at = :when "
+           "WHERE username = :username",
+           {"password": hash_password(password), "when": _now(), "username": clean})
+    return ""
+
+
+def set_role(name: str, role: str) -> str:
+    from . import db
+
+    clean = str(name).strip()
+    if role not in ROLES:
+        return "That is not a role this app has."
+    if clean not in stored_accounts():
+        return "That account lives in the app's settings and cannot be changed here."
+    if role != "admin" and _last_admin(clean):
+        return "That is the only admin left — make somebody else an admin first."
+    db.run("UPDATE accounts SET role = :role, changed_at = :when WHERE username = :username",
+           {"role": role, "when": _now(), "username": clean})
+    return ""
+
+
+def set_active(name: str, active: bool) -> str:
+    """Suspend or restore an account without losing what it has recorded."""
+    from . import db
+
+    clean = str(name).strip()
+    if clean not in stored_accounts():
+        return "That account lives in the app's settings and cannot be changed here."
+    if not active and _last_admin(clean):
+        return "That is the only admin left — make somebody else an admin first."
+    db.run("UPDATE accounts SET active = :active, changed_at = :when "
+           "WHERE username = :username",
+           {"active": 1 if active else 0, "when": _now(), "username": clean})
+    return ""
+
+
+def remove_account(name: str) -> str:
+    """Delete an account. What it recorded stays; its name stays on that record."""
+    from . import db
+
+    clean = str(name).strip()
+    if clean not in stored_accounts():
+        return "That account lives in the app's settings and cannot be removed here."
+    if _last_admin(clean):
+        return "That is the only admin left — make somebody else an admin first."
+    db.run("DELETE FROM accounts WHERE username = :username", {"username": clean})
+    return ""
+
+
+def _last_admin(name: str) -> bool:
+    """True when losing this account's admin would leave nobody in charge.
+
+    An account in secrets always counts, because that one cannot be taken away
+    from inside the app — it is the way back in when everything else is wrong.
+    """
+    if founders():
+        return False
+    others = [account for account, row in stored_accounts().items()
+              if account != name and int(row.get("active") or 0)
+              and str(row.get("role")) == "admin"]
+    return not others
+
+
+def seen(name: str) -> None:
+    """Note that somebody signed in, quietly — this must never block a sign-in."""
+    from . import db
+
+    try:
+        if str(name).strip() in stored_accounts():
+            db.run("UPDATE accounts SET last_seen = :when WHERE username = :username",
+                   {"when": _now(), "username": str(name).strip()})
+    except Exception:
+        pass
+
+
+def seed_admin(from_name: str) -> bool:
+    """Give the founding secrets account a database row called ``admin``.
+
+    The account in secrets was named by whoever first set the app up, and the
+    app cannot rename it — secrets are read-only from in here. What it can do is
+    write an ``admin`` row carrying the same password hash, so from the next
+    sign-in the name on the door is ``admin`` and the password has not changed.
+    The old name keeps working until its line is deleted from secrets, which is
+    the safe order to do this in.
+    """
+    from . import db
+
+    stored = founders().get(str(from_name).strip())
+    if not stored or ADMIN in stored_accounts():
+        return False
+    try:
+        db.upsert("accounts", "username", {
+            "username": ADMIN, "password": str(stored), "role": "admin",
+            "display_name": None, "active": 1, "created_at": _now(),
+            "created_by": str(from_name).strip(), "changed_at": _now(),
+            "last_seen": None})
+    except Exception:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +398,7 @@ def first_account() -> None:
              "Make the first one here — it takes about a minute.")
 
     with st.form("first_account"):
-        name = st.text_input("Name to sign in with", placeholder="chris")
+        name = st.text_input("Name to sign in with", placeholder="admin")
         password = st.text_input("Password", type="password")
         again = st.text_input("Password again", type="password")
         made = st.form_submit_button("Make the line to paste", type="primary",
@@ -162,10 +417,11 @@ def first_account() -> None:
             st.success("Copy these two lines into the app's secrets.")
             st.code(f'[passwords]\n{clean} = "{hash_password(password)}"', language="toml")
             st.markdown(where_secrets_live())
-            st.caption("The password itself is not in that line and cannot be worked back "
-                       "out of it. Add more people by adding more lines under the same "
-                       "`[passwords]` heading. Then sign in with the name and password you "
-                       "just chose.")
+            st.caption("The password itself is not in that line and cannot be worked "
+                       "back out of it. Sign in with the name and password you just "
+                       "chose — you will be an admin, and everybody after you can be "
+                       "added from inside the app on **Setup → People**, with no more "
+                       "editing of settings.")
 
     with st.expander("Other ways to make the line"):
         st.markdown(
@@ -220,14 +476,28 @@ def sign_in_form(logo: str | None = None) -> None:
             return
 
         if submitted:
-            stored = accounts().get(name.strip())
+            who = name.strip()
+            stored = accounts().get(who)
             if stored and verify(password, stored):
-                st.session_state[SESSION_KEY] = name.strip()
+                # The founding account gets an `admin` row on its way in, so the
+                # name on the door becomes `admin` without anybody editing
+                # secrets first. Same password; nothing to remember.
+                if who in founders():
+                    seed_admin(who)
+                st.session_state[SESSION_KEY] = who
                 st.session_state[ATTEMPTS_KEY] = (0, 0.0)
+                seen(who)
                 st.rerun()
+            elif who and who in {account for account, row in stored_accounts().items()
+                                 if not int(row.get("active") or 0)}:
+                st.error("That account has been suspended. Ask an admin to turn it "
+                         "back on.")
             else:
                 _record_failure()
                 st.error("That name and password do not match an account.")
+
+        st.caption("No account? Somebody with an admin sign-in can make you one on the "
+                   "app's **Setup → People** tab.")
 
 
 def require(logo: str | None = None) -> str:

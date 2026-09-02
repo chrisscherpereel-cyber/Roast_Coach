@@ -242,6 +242,19 @@ def schema(name: str) -> list[str]:
                data TEXT NOT NULL)""",
         "CREATE INDEX IF NOT EXISTS reference_kind ON reference (kind)",
 
+        # Who is allowed in. Accounts in Streamlit secrets cannot be added from
+        # inside the app -- that is the point of secrets -- so anybody the owner
+        # wants to let in has to live somewhere the app can write. Only the hash
+        # is here; the password itself is not stored anywhere, ever.
+        """CREATE TABLE IF NOT EXISTS accounts (
+               username TEXT PRIMARY KEY,
+               password TEXT NOT NULL,
+               role TEXT DEFAULT 'roaster',
+               display_name TEXT,
+               active INTEGER DEFAULT 1,
+               created_at TEXT, created_by TEXT,
+               changed_at TEXT, last_seen TEXT)""",
+
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)",
     ]
 

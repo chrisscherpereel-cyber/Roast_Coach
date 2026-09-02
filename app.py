@@ -69,7 +69,10 @@ NEEDS = (("roastcoach/knowledge.py", knowledge, 1),
          ("roastcoach/coach.py", coach, 4),
          ("roastcoach/diagnostics.py", diagnostics, 1),
          ("roastcoach/evidence.py", evidence, 1),
-         ("roastcoach/recipe.py", recipe, 4))
+         ("roastcoach/recipe.py", recipe, 4),
+         # Not fatal if it is behind — an older auth.py still signs people in,
+         # and the People tab says so rather than half-working.
+         ("roastcoach/auth.py", auth, 2))
 
 STALE = [name for name, module, wanted in NEEDS
          if getattr(module, "VERSION", 0) < wanted]
@@ -394,7 +397,8 @@ def account_strip(user: str):
         st.divider()
         sidebar_sync()
         st.divider()
-        st.caption(f"Signed in as **{user}**")
+        role = optional(auth, "role_of", user, default="")
+        st.caption(f"Signed in as **{user}**" + (f" · {role}" if role else ""))
         st.caption(db.describe())
         if not db.is_shared():
             st.caption(":orange[This computer only — see the README to share a database.]")
@@ -2384,12 +2388,21 @@ def page_design():
                          key="design_name")
     out = st.columns(3)
 
-    sheet = optional(design, "as_sheet", plan, default="")
-    out[0].download_button("The one-pager", sheet or "",
-                           file_name=f"{name.replace(' ', '-').lower()}.md",
-                           use_container_width=True,
-                           help="A page to have beside the roaster, with blanks for what "
-                                "actually happened.")
+    # A PDF where the module can make one, so the page prints the same wherever
+    # it is opened. An older module without the renderer still gives a one-pager.
+    sheet = optional(design, "as_pdf", plan, default=None)
+    stem = "-".join(part for part in name.split() if part).lower() or "roast-plan"
+    if sheet:
+        out[0].download_button("The one-pager", sheet, file_name=f"{stem}.pdf",
+                               mime="application/pdf", use_container_width=True,
+                               help="A page to print and have beside the roaster, with "
+                                    "blanks for what actually happened.")
+    else:
+        out[0].download_button("The one-pager",
+                               optional(design, "as_sheet", plan, default="") or "",
+                               file_name=f"{stem}.md", use_container_width=True,
+                               help="A page to have beside the roaster, with blanks for "
+                                    "what actually happened.")
     as_file = optional(design, "as_roastime", plan, name, default={})
     out[1].download_button("A RoasTime recipe", json.dumps(as_file, indent=1),
                            file_name=f"{name.replace(' ', '-').lower()}.json",
@@ -2615,16 +2628,191 @@ def page_compare():
 def page_setup():
     """Everything that is about the app rather than about a roast.
 
-    Two questions live here and they are not the same question: *is my data all
-    right* — where it is kept, what arrived, what is behind — and *why should I
-    believe any of this*. Two tabs, one page, and neither of them in the way of
-    the four things a roaster came to do.
+    Three questions live here and they are not the same question: *is my data
+    all right* — where it is kept, what arrived, what is behind — *who else can
+    get in*, and *why should I believe any of this*. Three tabs, one page, and
+    none of them in the way of the four things a roaster came to do.
     """
-    data, method = st.tabs(["Data and sync", "How it decides"])
+    data, folk, method = st.tabs(["Data and sync", "People", "How it decides"])
     with data:
         page_data()
+    with folk:
+        page_people()
     with method:
         page_method()
+
+
+def page_people():
+    """Who can sign in, and — for an admin — the making and unmaking of them.
+
+    Two things share this tab because they answer the same question from two
+    sides. Everyone sees their own account and can change their own password;
+    an admin also sees everybody else's and can hand out a login without going
+    anywhere near the app's settings.
+    """
+    me = auth.current_user() or ""
+    known = optional(auth, "role_of", me, default="") or ""
+    admin = bool(optional(auth, "is_admin", default=False))
+    founding = optional(auth, "founders", default={}) or {}
+    rows = optional(auth, "people", default=None)
+
+    if rows is None:
+        st.info("This copy of the app keeps its accounts in its settings file. To add "
+                "people from inside the app, update `roastcoach/auth.py`.")
+        return
+
+    brand_header("Who can get in")
+    st.caption(f"You are signed in as **{me}**"
+               + (f" — **{known}**." if known else "."))
+
+    # Said after the rerun that follows making somebody, which would otherwise
+    # take the confirmation off the screen before it had been read.
+    told = st.session_state.pop("people_said", "")
+    if told:
+        st.success(told, icon=":material/person_add:")
+
+    # The founding account is named in secrets and the app cannot rename it, so
+    # it seeds an `admin` row on the way in. Say so once, and say what to do next.
+    kept = {str(row["username"]) for row in rows}
+    if admin and auth.ADMIN in kept and founding and auth.ADMIN not in founding:
+        st.success(
+            f"There is now an **{auth.ADMIN}** account with the same password as your "
+            f"**{', '.join(sorted(founding))}** sign-in. Use `{auth.ADMIN}` from now on. "
+            "When you are happy it works, delete the old line from the app's secrets — "
+            "leaving it there is a second door with the same key.",
+            icon=":material/key:")
+
+    def said(value, fallback="—"):
+        """A database field as a person reads it. A column nobody has filled in
+        comes back from pandas as NaN, and NaN is truthy — printing it puts the
+        word `nan` in a table of people's names."""
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return fallback
+        text = str(value).strip()
+        return text or fallback
+
+    if admin:
+        listing = [{
+            "Name": name, "Full name": "—", "Role": "admin",
+            "Status": "in the app's settings",
+            "Added": "—", "Last seen": "—",
+        } for name in sorted(founding) if name not in kept]
+        for row in rows:
+            listing.append({
+                "Name": said(row.get("username")),
+                "Full name": said(row.get("display_name")),
+                "Role": said(row.get("role"), "roaster"),
+                "Status": "active" if int(row.get("active") or 0) else "suspended",
+                "Added": said(row.get("created_at"))[:10],
+                "Last seen": said(row.get("last_seen"))[:16].replace("T", " "),
+            })
+        st.dataframe(pd.DataFrame(listing), width="stretch", hide_index=True)
+        st.caption("An account **in the app's settings** is the way back in if everything "
+                   "else goes wrong, so it cannot be changed or removed from in here.")
+
+    # Everybody's own password.
+    with st.expander("Change my password"):
+        with st.form("my_password"):
+            current = st.text_input("Current password", type="password")
+            fresh = st.text_input("New password", type="password")
+            again = st.text_input("New password again", type="password")
+            changed = st.form_submit_button("Change it", type="primary")
+        if changed:
+            stored = (optional(auth, "accounts", default={}) or {}).get(me)
+            wrong = optional(auth, "trouble_with", fresh, again, default="")
+            if not (stored and auth.verify(current, stored)):
+                st.error("That is not your current password.")
+            elif wrong:
+                st.warning(wrong)
+            else:
+                problem = optional(auth, "set_password", me, fresh, me, default="not here")
+                if problem:
+                    st.error(problem)
+                else:
+                    st.success("Changed. It takes effect the next time you sign in.")
+
+    if not admin:
+        st.caption("Ask an admin if you need an account made, suspended or reset.")
+        return
+
+    # Making somebody.
+    st.markdown("### Give somebody a login")
+    st.caption("They sign in at the same address with the name and password you set "
+               "here, and can change the password themselves afterwards.")
+    with st.form("add_person", clear_on_submit=True):
+        left, right = st.columns(2)
+        name = left.text_input("Name to sign in with", placeholder="sam",
+                               help="No spaces. This is what they type at the sign-in.")
+        full = right.text_input("Their full name", placeholder="Sam Ortiz",
+                                help="Optional — only so the list reads as people.")
+        first, second, third = st.columns([1, 1, 1])
+        password = first.text_input("A password for them", type="password")
+        repeat = second.text_input("That password again", type="password")
+        role = third.selectbox("What they can do", ["roaster", "admin"],
+                               help="A **roaster** does everything the app does with "
+                                    "roasts. An **admin** can also manage people.")
+        made = st.form_submit_button("Make the account", type="primary")
+
+    if made:
+        wrong = optional(auth, "trouble_with", password, repeat, default="")
+        if wrong:
+            st.warning(wrong)
+        else:
+            problem = optional(auth, "add_account", name, password, role, full, me,
+                               default="not here")
+            if problem:
+                st.error(problem)
+            else:
+                st.session_state["people_said"] = (
+                    f"**{name.strip()}** can sign in now, at this same address. Give "
+                    "them the name and the password you just typed — the app cannot "
+                    "show it again, because it did not keep it.")
+                st.rerun()
+
+    # Unmaking, resetting, promoting.
+    theirs = [str(row["username"]) for row in rows if str(row["username"]) != me]
+    if not theirs:
+        return
+
+    st.markdown("### Change somebody")
+    who = st.selectbox("Who", theirs, key="people_who")
+    row = next((item for item in rows if str(item["username"]) == who), {})
+    live = bool(int(row.get("active") or 0))
+    hands = st.columns([1.4, 1, 1])
+
+    with hands[0].popover("Reset their password", use_container_width=True):
+        with st.form("reset_password", clear_on_submit=True):
+            new = st.text_input("New password", type="password")
+            new_again = st.text_input("New password again", type="password")
+            reset = st.form_submit_button("Set it", type="primary")
+        if reset:
+            wrong = optional(auth, "trouble_with", new, new_again, default="")
+            if wrong:
+                st.warning(wrong)
+            else:
+                problem = optional(auth, "set_password", who, new, me, default="not here")
+                st.error(problem) if problem else st.success(
+                    f"Done. Tell {who} the new password.")
+
+    other_role = "roaster" if str(row.get("role")) == "admin" else "admin"
+    if hands[1].button(f"Make {other_role}", use_container_width=True,
+                       help="An admin can manage people. A roaster cannot."):
+        problem = optional(auth, "set_role", who, other_role, default="not here")
+        st.error(problem) if problem else st.rerun()
+
+    if hands[2].button("Let back in" if not live else "Suspend", use_container_width=True,
+                       help="Suspending keeps everything they recorded and stops them "
+                            "signing in. Nothing is lost and it can be undone."):
+        problem = optional(auth, "set_active", who, not live, default="not here")
+        st.error(problem) if problem else st.rerun()
+
+    with st.expander(f"Remove {who} for good"):
+        st.caption("Suspending is almost always the better answer: removing takes away "
+                   "the account, and their name stays on every roast and note they "
+                   "recorded, so the list of people no longer explains the record.")
+        if st.button(f"Remove {who}", key="remove_person"):
+            problem = optional(auth, "remove_account", who, default="not here")
+            st.error(problem) if problem else st.rerun()
 
 
 def the_library():
