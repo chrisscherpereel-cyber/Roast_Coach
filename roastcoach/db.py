@@ -178,6 +178,17 @@ def schema(name: str) -> list[str]:
                colortrack_ground DOUBLE PRECISION,
                updated_at TEXT, updated_by TEXT)""",
 
+        # A roast that has not happened yet: what the app proposed, what it
+        # expected, and — once a roast of that bean arrives — what came of it.
+        # This is the same bargain as `recommendations`, one level up: a whole
+        # recipe is a hypothesis, and one nobody checks is an opinion.
+        """CREATE TABLE IF NOT EXISTS roast_plans (
+               plan_id TEXT PRIMARY KEY,
+               name TEXT, bean TEXT, level TEXT, weight DOUBLE PRECISION,
+               built_from TEXT, confidence TEXT,
+               plan TEXT, created_at TEXT, created_by TEXT,
+               roast_id TEXT, outcome TEXT, graded_at TEXT)""",
+
         # A cup risk the app raised, and what the cupping table said about it.
         # This is where a hypothesis becomes an observation, or stops being one.
         """CREATE TABLE IF NOT EXISTS sensory (

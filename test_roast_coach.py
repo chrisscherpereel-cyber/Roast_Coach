@@ -679,6 +679,126 @@ check(not _next.empty and _next["changed"].any(),
       "the next roast is a plan with the changes marked in it",
       f"{len(_next)} steps, {int(_next['changed'].sum())} changed")
 
+print("\nDESIGNING A ROAST THAT HAS NOT HAPPENED YET")
+from roastcoach import design  # noqa: E402
+
+_built = demo_data.history(weeks=6, seed=4242)[:4]
+for _position, _roast in enumerate(_built):
+    _roast["uid"] = _roast["guid"] = f"design-{_position}"
+store.add_roasts(demo_data.as_files(_built))
+_designs = store.load_roasts()
+_seed = _designs[_designs["uid"] == "design-3"].iloc[0]
+_seed_moves = recipe.timeline(store.load_curve("design-3"), _seed.to_dict())
+_base = design.from_roast(_seed.to_dict(), _seed_moves)
+
+check(_base["steps"] and all(step.get("ibts") for step in _base["steps"]),
+      "a plan is read back off a roast that actually ran, every step at the IBTS "
+      "temperature it was made at", f"{len(_base['steps'])} steps")
+check(design.confidence(_base) == "measured",
+      "and rests on measurement, because that is exactly what it is")
+check(all(step["ibts"] >= 60 for step in _base["steps"]),
+      "with nothing from before the turning point, where the sensor is looking at an "
+      "empty drum")
+
+# The safety property. Brault's French is 460–465 °F, which converts to 239 °C —
+# and this roaster's IBTS drops sit between 207 and 218. Telling somebody to take
+# a Bullet to 239 °C IBTS is not a dark roast, it is a fire.
+_naive, _ = design.level_temperature("French")
+check(_naive > design.CEILING,
+      "the library's own French temperature is above what this app will ever propose, "
+      "which is the whole reason it is not used as a target",
+      f"the ladder says {_naive:.0f} °C; the cap is {design.CEILING:.0f} °C")
+_base["level"] = "City"
+_dark = design.to_level(_base, "French", _designs)
+check(_dark["drop"]["ibts"] <= design.CEILING,
+      "so a level change moves the drop by the *distance* between two rungs and caps "
+      "the result — a ladder built on another machine's probe cannot name a temperature "
+      "for this one", f"drops at {_dark['drop']['ibts']:.0f} °C")
+check(_dark["drop"]["ibts"] > _base["drop"]["ibts"],
+      "while still going darker, which is what was asked for",
+      f"{_base['drop']['ibts']:.0f} → {_dark['drop']['ibts']:.0f} °C")
+check(not _dark.get("warning"),
+      "a roast that stops short of second crack raises no alarm, because a warning on "
+      "every plan is a warning on none")
+
+# On this roaster's real machine the drops sit at 207–218 °C, and from there the
+# ladder wants to go past anything the library can vouch for.
+_hot = design.to_level({**_base, "drop": {**_base["drop"], "ibts": 218.0}},
+                       "French", _designs)
+check(_hot["drop"]["ibts"] == design.CEILING,
+      "from a drop where this roaster's own roasts actually land, the ladder runs off "
+      "the end and stops at the cap", f"{_hot['drop']['ibts']:.0f} °C")
+check(_hot.get("warning") and "fire" in _hot["warning"].lower(),
+      "and says plainly that this is where drum fires start, rather than printing a "
+      "number and leaving it there")
+check(any("Capped" in item["detail"] for item in _hot["provenance"]),
+      "with the capping written into the reasoning, not hidden in it")
+check(design.level_gap("City", "French") > 0 and design.level_gap("French", "City") < 0,
+      "the gap between two rungs is what travels between instruments, and it has a sign")
+
+# A level change with nothing to measure from must not invent a rung.
+_unlabelled = design.from_roast(_seed.to_dict(), _seed_moves)
+_shrug = design.to_level(_unlabelled, "French", _designs)
+check(_shrug["drop"]["ibts"] == _unlabelled["drop"]["ibts"],
+      "a roast with no level recorded leaves the drop alone rather than guessing where "
+      "it started from")
+
+# Batch size.
+_smaller = design.to_batch(_base, 500, _designs)
+_was = {step["ibts"]: step["to"] for step in _base["steps"] if step["control"] == "power"}
+_now = {step["ibts"]: step["to"] for step in _smaller["steps"] if step["control"] == "power"}
+check(_smaller["weight"] == 500 and all(_now[at] <= _was[at] for at in _was if at in _now),
+      "a smaller batch takes power out — the same heat goes further through less coffee",
+      " · ".join(f"{_was[at]}→{_now[at]}" for at in sorted(_was) if at in _now))
+check(_smaller["charge"]["ibts"] < _base["charge"]["ibts"],
+      "and charges cooler, because less coffee takes less heat out of the drum",
+      f"{_base['charge']['ibts']:.0f} → {_smaller['charge']['ibts']:.0f} °C")
+_bigger = design.to_batch(_base, 1000, _designs)
+check(_bigger["charge"]["ibts"] > _base["charge"]["ibts"],
+      "and a bigger one charges hotter, which is the same reasoning run backwards")
+check(design.to_batch(_base, _base["weight"], _designs)["steps"] == _base["steps"],
+      "while the same batch size changes nothing at all")
+
+_exponent, _fitted_on = design.batch_ratio_from_history(_designs)
+check(isinstance(_exponent, float) or _exponent != _exponent,
+      "the app fits the batch relationship from the roaster's own roasts where it can",
+      f"exponent {_exponent} from {_fitted_on} roast(s)")
+_told = design.to_batch(_base, 500, _designs, exponent=1.0)
+check(any("1.00" in item["detail"] for item in _told["provenance"]),
+      "and takes a number from the roaster over its own default when given one")
+
+# Every number knows what it rests on, and the plan is only as good as its worst.
+check(set(item["basis"] for item in _dark["provenance"]) <= set(design.BASIS),
+      "every line of reasoning is labelled measured, learned, library or assumed")
+check(design.confidence(_dark) in ("assumed", "library"),
+      "and a plan is only as good as its weakest part", design.confidence(_dark))
+
+# Getting it out.
+_file = design.as_roastime(_dark, "Test French 800g")
+check(_file["startSettings"] and _file["events"] and _file["endSettings"],
+      "a plan leaves as a RoasTime recipe: charge settings, events, an end alert")
+check(all(block[0]["trigger"] == design.ROASTIME_IBTS_TRIGGER for block in _file["events"]),
+      "with every event triggered on the IBTS, which is what the machine watches")
+check(_file["roastCoach"]["confidence"] == design.confidence(_dark),
+      "and carries its own confidence into the file, so it is still honest on the machine")
+_sheet = design.as_sheet(_dark)
+check("What actually happened" in _sheet and "IBTS" in _sheet,
+      "and as a page to have beside the roaster, with blanks for what actually happened")
+
+# The loop: a plan is a hypothesis, and one nobody checks is an opinion.
+_plan_id = store.save_plan(_dark, "Test French")
+check(_plan_id and len(store.open_plans()) >= 1,
+      "a plan is kept, waiting on the roast that will answer it")
+_outcome = store.grade_plan(_plan_id, "design-3", _seed.to_dict())
+check(_outcome.get("drop") and "miss" in _outcome["drop"],
+      "and grades as the miss — two degrees under is actionable where a score is not",
+      f"{_outcome['drop']['miss']:+.0f} °C")
+check(not len(store.open_plans()),
+      "after which it is no longer waiting on anything")
+store.forget_plan(_plan_id)
+store.forget([f"design-{n}" for n in range(4)])
+
+
 print("\nTHE LIBRARY — what the app has read, and what it has not")
 from roastcoach import knowledge  # noqa: E402
 
@@ -1523,7 +1643,7 @@ os.environ.pop("ROAST_COACH_PAGE", None)
 # "Data" and "Method" are the two tabs of Setup. "After the roast" keeps a page
 # of its own — filling in four roasts you cupped this morning is a list to work
 # through, not a roast to read — and also appears as a tab on the roast itself.
-for page in ("Coach", "Roasts", "After the roast", "Compare", "Setup"):
+for page in ("Coach", "Roasts", "After the roast", "Design", "Compare", "Setup"):
     os.environ["ROAST_COACH_PAGE"] = page
     opened = AppTest.from_file("app.py", default_timeout=300)
     opened.session_state[auth.SESSION_KEY] = "tester"
@@ -1555,7 +1675,7 @@ del library.link_report
 del _metrics_module.phase_shares
 store.VERSION = library.VERSION = _metrics_module.VERSION = 1
 try:
-    for page in ("Coach", "Roasts", "After the roast", "Compare", "Setup"):
+    for page in ("Coach", "Roasts", "After the roast", "Design", "Compare", "Setup"):
         os.environ["ROAST_COACH_PAGE"] = page
         half = AppTest.from_file("app.py", default_timeout=120)
         half.session_state[auth.SESSION_KEY] = "tester"

@@ -118,7 +118,7 @@ ROAST_LEVELS = ("Arabic", "Cinnamon", "New England", "American", "City",
                 "Full City", "Vienna", "French", "Italian")
 
 TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
-          "effects", "rule_stats", "sources", "reference", "sensory")
+          "effects", "rule_stats", "sources", "reference", "sensory", "roast_plans")
 
 # What this file can do, for a deploy that updated some files and not others.
 # app.py says which version it needs and names anything older on screen instead
@@ -139,7 +139,9 @@ TABLES = ("roasts", "roast_curve", "roast_notes", "recommendations",
 #  11  who roasted it is something the roaster types, not something RoasTime knows
 #  12  colour is recorded per preparation — whole bean or ground — and the roast
 #      level has the names roasters use for it
-VERSION = 12
+#  13  roast plans: a recipe built before the roast, kept, then graded against
+#      the roast that ran from it
+VERSION = 13
 
 
 # What the importer keeps off a roast file. A roast stamped with an older number
@@ -1145,3 +1147,127 @@ def effect(key: str, path: str | None = None) -> dict | None:
         return None
     return dict(zip(("key", "control", "phase", "metric", "slope", "observations", "spread"),
                     row))
+
+
+# ---------------------------------------------------------------------------
+# Plans: a roast that has not happened yet
+# ---------------------------------------------------------------------------
+
+
+def save_plan(plan: dict, name: str = "", path: str | None = None) -> str:
+    """Keep a recipe the app built, with everything it predicted.
+
+    A plan is a hypothesis — this bean, this level, this batch size, dropped
+    here, in about this long — and the only thing that makes it more than an
+    opinion is that somebody checks it afterwards. So it is stored whole, and
+    :func:`grade_plan` matches it to the roast that follows.
+    """
+    from . import design
+
+    db.prepare(path)
+    plan_id = hashlib.sha256(
+        (json.dumps(plan, sort_keys=True, default=str) + _now()).encode()
+    ).hexdigest()[:16]
+
+    db.upsert("roast_plans", "plan_id", {
+        "plan_id": plan_id,
+        "name": name or design._name(plan),
+        "bean": str(plan.get("bean") or ""),
+        "level": str(plan.get("level") or ""),
+        "weight": _plain(plan.get("weight")),
+        "built_from": str(plan.get("from_roast") or ""),
+        "confidence": design.confidence(plan),
+        "plan": json.dumps(plan, default=str),
+        "created_at": _now(),
+        "created_by": _who(),
+        "roast_id": None, "outcome": None, "graded_at": None,
+    }, override=path)
+    return plan_id
+
+
+def plans(path: str | None = None) -> pd.DataFrame:
+    """Every plan, newest first, with whatever became of it."""
+    frame = db.frame("SELECT * FROM roast_plans", override=path)
+    if frame.empty:
+        return frame
+    return frame.sort_values("created_at", ascending=False).reset_index(drop=True)
+
+
+def plan(plan_id: str, path: str | None = None) -> dict:
+    row = db.one("SELECT plan FROM roast_plans WHERE plan_id = :id",
+                 {"id": plan_id}, override=path)
+    try:
+        return json.loads(row[0]) if row else {}
+    except Exception:
+        return {}
+
+
+def open_plans(bean: str | None = None, path: str | None = None) -> pd.DataFrame:
+    """Plans nobody has roasted yet — the ones a new roast might answer."""
+    frame = plans(path)
+    if frame.empty:
+        return frame
+    waiting = frame[frame["roast_id"].isna() | (frame["roast_id"] == "")]
+    if bean:
+        waiting = waiting[waiting["bean"].astype(str) == str(bean)]
+    return waiting
+
+
+def grade_plan(plan_id: str, roast_id: str, roast_row: dict,
+               path: str | None = None) -> dict:
+    """What the roast did against what the plan said it would.
+
+    Three numbers, because three are what a plan actually commits to: where it
+    dropped, how long it took, and — where the roaster has recorded one — what
+    level it came out. Each is reported as the miss, not as a pass mark, because
+    "two degrees under" is something a roaster can act on and "83%" is not.
+    """
+    held = plan(plan_id, path)
+    if not held:
+        return {}
+
+    expected = held.get("drop") or {}
+    outcome = {"roast": roast_id}
+
+    for key, actual_field, unit in (
+            ("ibts", "drumDropTemperature", "°C"),
+            ("expect_minutes", "totalRoastMinutes", "min")):
+        wanted = expected.get(key)
+        got = roast_row.get(actual_field)
+        try:
+            wanted, got = float(wanted), float(got)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(wanted) and np.isfinite(got):
+            outcome["drop" if key == "ibts" else "time"] = {
+                "planned": round(wanted, 1), "actual": round(got, 1),
+                "miss": round(got - wanted, 1), "unit": unit,
+            }
+
+    wanted_level = str(held.get("level") or "").strip()
+    got_level = roast_row.get("roast_level")
+    got_level = "" if got_level is None or got_level != got_level else str(got_level).strip()
+    if got_level.lower() in ("nan", "none"):
+        got_level = ""
+    if wanted_level and got_level:
+        outcome["level"] = {"planned": wanted_level, "actual": got_level,
+                            "same": wanted_level.lower() == got_level.lower()}
+
+    db.run("UPDATE roast_plans SET roast_id = :roast, outcome = :outcome, "
+           "graded_at = :when WHERE plan_id = :id",
+           {"roast": roast_id, "outcome": json.dumps(outcome), "when": _now(),
+            "id": plan_id}, override=path)
+    return outcome
+
+
+def plan_outcome(plan_id: str, path: str | None = None) -> dict:
+    row = db.one("SELECT outcome FROM roast_plans WHERE plan_id = :id",
+                 {"id": plan_id}, override=path)
+    try:
+        return json.loads(row[0]) if row and row[0] else {}
+    except Exception:
+        return {}
+
+
+def forget_plan(plan_id: str, path: str | None = None) -> None:
+    db.run("DELETE FROM roast_plans WHERE plan_id = :id", {"id": plan_id}, override=path)

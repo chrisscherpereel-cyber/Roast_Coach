@@ -14,8 +14,8 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
-from roastcoach import (auth, charts, coach, db, demo_data, diagnostics, evidence,
-                        knowledge, learning, library, recipe, store)
+from roastcoach import (auth, charts, coach, db, demo_data, design, diagnostics,
+                        evidence, knowledge, learning, library, recipe, store)
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach import metrics as metric_rules
 from roastcoach.naming import label_for
@@ -61,7 +61,8 @@ def load(token) -> pd.DataFrame:
 # for one function per file was the earlier attempt, and it only ever caught the
 # function I happened to think of.
 NEEDS = (("roastcoach/knowledge.py", knowledge, 1),
-         ("roastcoach/store.py", store, 12),
+         ("roastcoach/design.py", design, 1),
+         ("roastcoach/store.py", store, 13),
          ("roastcoach/library.py", library, 9),
          ("roastcoach/metrics.py", metric_rules, 3),
          ("roastcoach/coach.py", coach, 4),
@@ -2181,6 +2182,215 @@ def page_after():
     after_the_roast(row, frame)
 
 
+def page_design():
+    """Building a roast that has not happened yet.
+
+    Everywhere else the app reads backwards. Here it writes forwards: take a
+    roast that worked, say what you want different — darker, or a smaller batch —
+    and get the recipe out. Every line of it says whether it came from your own
+    roasts or from a book, because a plan is only as good as its weakest part and
+    you should be able to see which part that is before you light the drum.
+    """
+    frame = roasts()
+    brand_header("Build the next roast, rather than read the last one")
+
+    starting = st.radio(
+        "Start from", ["a roast that worked", "nothing — the library"],
+        horizontal=True, key="design_start",
+        help="Starting from one of your own roasts is much the stronger of the two: "
+             "it is a profile this machine has actually run, not one somebody wrote.")
+
+    plan = None
+    if starting.startswith("a roast"):
+        if frame.empty:
+            st.info("No roasts yet — start from the library instead.")
+            return
+        ordered = frame.sort_values("roasted_at", ascending=False)
+        rated = ordered[pd.to_numeric(ordered.get("rating"), errors="coerce").notna()]
+        labels = {}
+        for _, item in ordered.iterrows():
+            mark = ""
+            if pd.notna(item.get("rating")) and item.get("rating"):
+                mark = f" · rated {float(item['rating']):.1f}"
+            labels[f"{str(item['roasted_at'])[:10]} · "
+                   f"{text_of(item.get('roast_name')) or text_of(item.get('bean')) or item['uid'][:8]}"
+                   f"{mark}"] = item["uid"]
+        if not rated.empty:
+            st.caption("Roasts you have rated are marked. The best one you have made of a "
+                       "coffee is usually the right thing to build the next one from.")
+        chosen = st.selectbox("Roast", list(labels), key="design_source")
+        source = frame[frame["uid"] == labels[chosen]].iloc[0]
+        moves = moves_for(source["uid"], token())
+        plan = optional(design, "from_roast", source.to_dict(), moves, default=None)
+        if plan and not plan.get("level"):
+            st.warning(
+                "That roast has no roast level recorded, so a level change has nothing "
+                "to measure from — the app will leave the drop where it is. Put a level "
+                "on it in **After the roast** and come back.",
+                icon=":material/label_off:")
+    else:
+        columns = st.columns(3)
+        beans = sorted({text_of(value) for value in frame.get("bean", pd.Series(dtype=str))
+                        if text_of(value)}) if not frame.empty else []
+        bean = columns[0].selectbox("Bean", ["(a coffee not here yet)"] + beans,
+                                    key="design_bean")
+        weight = columns[1].number_input("Batch (g)", value=800.0, step=50.0,
+                                         key="design_weight")
+        level = columns[2].selectbox("Level", list(getattr(store, "ROAST_LEVELS", ())),
+                                     index=4, key="design_level")
+        plan = optional(design, "blank",
+                        "" if bean.startswith("(") else bean, weight, level, default=None)
+        st.info("Built from the library alone — a declining rate of rise with the power "
+                "eased off twice. It is a place to start, not a recipe anybody has run. "
+                "The first roast you make from it replaces all of this.",
+                icon=":material/menu_book:")
+
+    if not plan:
+        st.warning("This deploy's roastcoach/design.py is older than app.py expects.")
+        return
+
+    st.divider()
+    st.markdown("### What do you want different?")
+    wanted = st.columns(2)
+    levels = list(getattr(store, "ROAST_LEVELS", ()))
+    now_level = plan.get("level") if plan.get("level") in levels else None
+    target = wanted[0].selectbox(
+        "Roast level", ["leave it"] + levels,
+        index=(levels.index(now_level) + 1) if now_level else 0, key="design_target",
+        help="Where you have roasted this level before, the app uses what you actually "
+             "dropped at. Where you have not, it moves the drop by the distance between "
+             "the two levels on Brault's ladder — his absolute temperatures are bean "
+             "probe readings on a ten-pound drum and mean nothing on a Bullet's IBTS.")
+    batch = wanted[1].number_input(
+        "Batch size (g)", value=float(plan.get("weight") or 800), step=50.0,
+        key="design_batch",
+        help="Less coffee takes the same heat further, so the power comes down. How far "
+             "is fitted from your own roasts across batch sizes where you have them.")
+
+    if target != "leave it" and target != plan.get("level"):
+        plan = optional(design, "to_level", plan, target, frame, default=plan)
+    if abs(float(batch) - float(plan.get("weight") or 0)) > 1:
+        plan = optional(design, "to_batch", plan, float(batch), frame, default=plan)
+
+    if plan.get("warning"):
+        st.error(plan["warning"], icon=":material/local_fire_department:")
+
+    sure = optional(design, "confidence", plan, default="assumed")
+    tone = {"measured": st.success, "learned": st.success,
+            "library": st.info, "assumed": st.warning}.get(sure, st.warning)
+    tone({"measured": "Every part of this comes from roasts you have actually made.",
+          "learned": "This rests on effect sizes fitted to your own machine.",
+          "library": "The weakest part of this comes from a book rather than from your "
+                     "roasts — read the reasoning below before you run it.",
+          "assumed": "The weakest part of this is reasoning nobody has checked. It is a "
+                     "hypothesis to roast and measure, not an instruction."}[sure],
+         icon=":material/science:")
+
+    st.markdown("### The roast, step by step")
+    table = optional(design, "as_table", plan, default=pd.DataFrame())
+    st.dataframe(table, width="stretch", hide_index=True)
+    st.caption("Every temperature is the **IBTS**. Make each change when that number "
+               "arrives — early or late is the roast telling you something, and the "
+               "expected time is there to say which.")
+
+    with st.expander("Where each number comes from", expanded=(sure == "assumed")):
+        for item in plan.get("provenance") or []:
+            st.markdown(f"**{item['what']}** — *{item['basis']}*  \n{item['detail']}")
+
+    st.markdown("### Take it away")
+    name = st.text_input("Call it", value=optional(design, "_name", plan, default="Roast"),
+                         key="design_name")
+    out = st.columns(3)
+
+    sheet = optional(design, "as_sheet", plan, default="")
+    out[0].download_button("The one-pager", sheet or "",
+                           file_name=f"{name.replace(' ', '-').lower()}.md",
+                           use_container_width=True,
+                           help="A page to have beside the roaster, with blanks for what "
+                                "actually happened.")
+    as_file = optional(design, "as_roastime", plan, name, default={})
+    out[1].download_button("A RoasTime recipe", json.dumps(as_file, indent=1),
+                           file_name=f"{name.replace(' ', '-').lower()}.json",
+                           use_container_width=True,
+                           help="RoasTime's own format, to import on the machine. This "
+                                "app never writes into RoasTime's folder — the file goes "
+                                "to your downloads and the rest is up to you.")
+    if out[2].button("Save it and grade it later", type="primary",
+                     use_container_width=True,
+                     help="Kept with everything it predicts. When you roast this bean "
+                          "again the app matches them up and says whether it held."):
+        plan_id = optional(store, "save_plan", plan, name, default=None)
+        refresh()
+        if plan_id:
+            st.success(f"Saved. Roast it, sync, and the app will grade it.",
+                       icon=":material/check_circle:")
+
+    saved_plans(frame)
+
+
+def saved_plans(frame):
+    """Plans already built: what they predicted, and what came of them."""
+    held = optional(store, "plans", default=pd.DataFrame())
+    if held is None or held.empty:
+        return
+
+    st.divider()
+    st.markdown("### Plans you have built")
+
+    # A plan waiting on a roast of that bean is the interesting case: the roast
+    # may already be here.
+    waiting = held[held["roast_id"].isna() | (held["roast_id"] == "")]
+    for _, item in waiting.iterrows():
+        candidates = frame[frame["bean"].astype(str) == str(item["bean"])] \
+            if not frame.empty and "bean" in frame else pd.DataFrame()
+        if not candidates.empty:
+            newest = candidates.sort_values("roasted_at").iloc[-1]
+            if str(newest.get("date") or "") > str(item["created_at"] or "")[:10]:
+                columns = st.columns([3, 1])
+                columns[0].caption(
+                    f"**{item['name']}** — you have roasted {item['bean']} since this "
+                    f"was built. Grade it against {newest['label']}?")
+                if columns[1].button("Grade it", key=f"grade_{item['plan_id']}",
+                                     use_container_width=True):
+                    optional(store, "grade_plan", item["plan_id"], newest["uid"],
+                             newest.to_dict())
+                    refresh()
+                    st.rerun()
+
+    shown = pd.DataFrame({
+        "Built": held["created_at"].astype(str).str[:10],
+        "Name": held["name"], "Bean": held["bean"], "Level": held["level"],
+        "Batch": held["weight"], "Resting on": held["confidence"],
+        "Roasted": held["roast_id"].fillna("").map(lambda v: "yes" if v else "not yet"),
+    })
+    st.dataframe(shown, width="stretch", hide_index=True)
+
+    graded = held[held["outcome"].notna() & (held["outcome"] != "")]
+    if graded.empty:
+        st.caption("None of them has been roasted and graded yet. That is the half that "
+                   "turns a recipe into something the app can learn from.")
+        return
+
+    st.markdown("#### How they turned out")
+    rows = []
+    for _, item in graded.iterrows():
+        outcome = optional(store, "plan_outcome", item["plan_id"], default={}) or {}
+        row = {"Plan": item["name"]}
+        if outcome.get("drop"):
+            row["Drop planned"] = f"{outcome['drop']['planned']:.0f} °C"
+            row["Drop actual"] = f"{outcome['drop']['actual']:.0f} °C"
+            row["Out by"] = f"{outcome['drop']['miss']:+.0f} °C"
+        if outcome.get("time"):
+            row["Time out by"] = f"{outcome['time']['miss']:+.1f} min"
+        if outcome.get("level"):
+            row["Level"] = ("as planned" if outcome["level"]["same"]
+                            else f"{outcome['level']['planned']} → {outcome['level']['actual']}")
+        rows.append(row)
+    st.dataframe(pd.DataFrame(rows), width="stretch", hide_index=True)
+    st.caption("The miss is the useful number. Two degrees under is something you can "
+               "act on; a percentage score is not.")
+
+
 def page_compare():
     frame = roasts()
     if frame.empty:
@@ -2547,6 +2757,7 @@ def main():
         st.Page(page_coach, title="Coach", icon=":material/insights:"),
         st.Page(page_roasts, title="Roasts", icon=":material/local_fire_department:"),
         st.Page(page_after, title="After the roast", icon=":material/edit_note:"),
+        st.Page(page_design, title="Design", icon=":material/architecture:"),
         st.Page(page_compare, title="Compare", icon=":material/analytics:"),
         st.Page(page_setup, title="Setup", icon=":material/settings:"),
     ]

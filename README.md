@@ -191,7 +191,46 @@ than with instructions for finding the right page. Where the fix is genuinely yo
 
 ---
 
-## The four pages, in the order a roast lives through them
+## Designing a roast, not only reading one
+
+**Design** takes a roast that worked and writes the recipe for one that has not happened
+yet — at a different roast level, a different batch size, or both. Start from your best
+roast of a coffee, or from nothing at all and let the library set the shape.
+
+**Every number says where it came from.** A step is *measured* when it is read off your own
+roasts, *learned* when it comes from an effect size fitted to your machine, *library* when
+it comes from a book, and *assumed* when it is reasoning nobody has checked. A plan is only
+as good as its weakest part, and the app says which part that is before you light the drum.
+
+**Roast level changes are anchored to your machine, not to a book.** Brault's French roast
+is 460–465 °F, which converts to 239 °C. This roaster's IBTS drops sit between 207 and
+218 °C — his numbers are bean-probe readings on a ten-pound drum, and aiming a Bullet's
+infrared sensor at them would be a fire rather than a dark roast. So where you have roasted
+a level before, your own drop temperature is used; where you have not, only the *distance*
+between two rungs of his ladder is carried across, applied to a temperature your machine
+has actually reached, and capped at 232 °C with the reason stated. Past second crack the
+plan says plainly that this is where drum fires start.
+
+**Batch size** comes out of the physics: the drum puts in about the same heat at a given
+power setting and there is less coffee to absorb it. How much power to take out is fitted
+from your own roasts across batch sizes where you have them, and falls back to
+charge^0.70 — less than proportional, because the heat lost to the drum and the exhaust
+does not shrink with the charge — saying so plainly when it does. The charge temperature
+moves with it, about 5 °C per 100 g.
+
+A plan leaves three ways: **on screen** step by step, as a **RoasTime recipe file** in
+their own format to import on the machine, and as a **printable one-pager** with blanks for
+what actually happened. Nothing is ever written into RoasTime's folder.
+
+And a plan is kept. **Save it and the app grades it** against the roast you run from it —
+planned drop against actual, planned time against actual, planned level against what you
+recorded — reported as the miss, because *two degrees under* is something you can act on
+and a percentage is not. That is the same bargain the coach already makes with its own
+advice, one level up: a recipe nobody checks is an opinion.
+
+---
+
+## The six pages, in the order a roast lives through them
 
 **Coach** — what to change on your next roast, as **the next roast written out step by
 step**: what to set at charge, and every change after it *at the IBTS temperature where it
@@ -205,6 +244,9 @@ recipe), written out in full rather than clipped. Open one for the profile, the 
 was made at, which is not the same thing as the recipe and is no longer labelled as
 though it were — and what the roast did. The after-the-roast entry is here too, as a tab,
 for when you are already looking at the roast.
+
+**Design** — build the next roast: from one that worked or from nothing, at another level
+or another batch size, with every number labelled by what it rests on.
 
 **After the roast** — the input screen for everything RoasTime cannot know: colour on
 whichever meter you own, out weight, batch spread, quakers, what the beans looked like,
@@ -424,7 +466,7 @@ within 0.13 °C/min.
 ## Layout
 
 ```
-app.py                      the four pages
+app.py                      the six pages
 roastcoach/
   store.py                  the database: roasts, curves, notes, advice, outcomes
   coach.py                  the rules, the predictions, the grading
@@ -436,6 +478,8 @@ roastcoach/
   diagnostics.py            the condition dictionary: observation, diagnosis, cup risk
   evidence.py               the grades A–D, and who each claim rests on
   library.py                beans, recipes, machines — and joining them to roasts
+  design.py                 building a roast that has not happened yet
+  knowledge.py              the six sources in library/, and what each is silent on
   auth.py                   who is allowed in
   uploader.py, frontend/    the drop box, and an optional watched folder
   fields.py, csv_import.py  reading RoasTime's two formats
