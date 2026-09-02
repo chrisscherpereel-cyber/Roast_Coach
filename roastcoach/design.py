@@ -35,12 +35,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from . import knowledge
+from . import knowledge, learning
 
 # What this file can do — see the note in store.py.
 #   1  plans from a roast or from nothing; roast level and batch size transforms;
 #      RoasTime export
-VERSION = 1
+#   2  the plan as a curve you can pull about, and the recipe that follows from it
+VERSION = 2
 
 CONTROLS = ("power", "fan", "drum")
 
@@ -744,3 +745,285 @@ def as_sheet(plan: dict) -> str:
         "and the app will tell you whether it held.*",
     ]
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# The plan as a curve
+# ---------------------------------------------------------------------------
+
+# Where the roast is divided for the purpose of "how much power through here".
+# The same four phases the rest of the app uses, so a change drawn on the curve
+# lands on an effect size the app has actually fitted.
+PHASES = ("Drying", "Maillard", "Development")
+
+# How many points the roaster gets to pull. Enough to shape a curve, few enough
+# that each one means something — a control point every thirty seconds would be
+# drawing, not roasting.
+ANCHORS = 9
+
+
+def projection(plan: dict, curve=None, points: int = 90, after=None) -> pd.DataFrame:
+    """The roast this plan describes, as a curve: minutes, IBTS, rate of rise.
+
+    Where the plan came from a roast, that roast's own smoothed IBTS is the
+    shape — this is a projection of something real, not a drawing. Where it came
+    from the library, the shape is synthesised: a rate of rise that peaks after
+    the turning point and declines to nearly nothing at the drop, which is the
+    one thing every source agrees a roast should do.
+
+    Temperature is the integral of the rate of rise, so the two panels cannot
+    disagree with each other. Pull the rate of rise up in the middle and the
+    temperature curve steepens and the drop arrives sooner — which is what
+    actually happens, and is the whole reason this is worth dragging.
+    """
+    drop = plan.get("drop") or {}
+    charge = plan.get("charge") or {}
+    total = _number(drop.get("expect_minutes")) or 11.0
+    end = _number(drop.get("ibts")) or 215.0
+
+    if curve is not None and not getattr(curve, "empty", True):
+        found = _from_curve(curve, points, after)
+        if found is not None and not found.empty:
+            return found
+
+    # No roast to project from: a declining rate of rise, anchored at the two
+    # ends the plan does state — where it charges and where it drops.
+    start = _number(charge.get("ibts"))
+    turning = 1.2
+    minutes = np.linspace(0, total, points)
+    peak = 45.0
+    ror = np.where(
+        minutes < turning,
+        peak * (minutes / max(turning, 0.01)),
+        peak * np.exp(-1.15 * (minutes - turning) / max(total - turning, 0.01)))
+
+    # Scale the rate of rise so the integral actually lands on the drop
+    # temperature. A curve that ends somewhere other than where the plan says it
+    # drops is not a projection of that plan.
+    bottom = 90.0 if start is None else min(start, 95.0)
+    climb = np.concatenate([[0], np.cumsum(np.diff(minutes) * ror[:-1])])
+    if climb[-1] > 0:
+        ror = ror * ((end - bottom) / climb[-1])
+        climb = np.concatenate([[0], np.cumsum(np.diff(minutes) * ror[:-1])])
+    return pd.DataFrame({"minutes": minutes, "ibts": bottom + climb, "ror": ror,
+                         "measured": False})
+
+
+def _from_curve(curve, points: int, after=None) -> pd.DataFrame | None:
+    """A roast that happened, resampled onto an even grid.
+
+    Starting after the turning point, and after the sensor has settled. For the
+    first minute the IBTS is recovering onto the bean mass and reads a rate of
+    rise near 100 °C/min, which is the sensor catching up rather than the roast
+    heating. Handing somebody that as the first handle to drag would be handing
+    them an artefact.
+    """
+    frame = curve
+    time_column = ("time_minutes" if "time_minutes" in frame
+                   else ("seconds" if "seconds" in frame else None))
+    if time_column is None:
+        return None
+    minutes = (pd.to_numeric(frame[time_column], errors="coerce")
+               / (60.0 if time_column == "seconds" else 1.0))
+
+    warm = "smoothDrumTemperature" if "smoothDrumTemperature" in frame else "ibts_temp"
+    rate = "smoothDrumDerivative" if "smoothDrumDerivative" in frame else "ibts_ror"
+    if warm not in frame:
+        return None
+
+    held = pd.DataFrame({
+        "minutes": minutes,
+        "ibts": pd.to_numeric(frame[warm], errors="coerce"),
+        "ror": pd.to_numeric(frame.get(rate), errors="coerce"),
+    }).dropna(subset=["minutes", "ibts"]).sort_values("minutes")
+    if held.empty:
+        return None
+
+    # From the turning point — the roast's own, where it is known — and past the
+    # sensor's recovery, which is whichever comes later.
+    turning = float(after) if after else (
+        float(held.loc[held["ibts"].idxmin(), "minutes"]) if len(held) > 3 else 0.0)
+    # Settled means climbing, and climbing at a rate a roast can actually climb
+    # at. The plunge as cold beans fill the sensor's view reads far negative; the
+    # recovery afterwards reads near 100. Neither is the roast.
+    settled = held[(held["minutes"] > turning)
+                   & (held["ror"] > -2) & (held["ror"] < 60)]
+    start = float(settled["minutes"].min()) if not settled.empty else turning
+    held = held[held["minutes"] >= start]
+    if len(held) < 5:
+        return None
+
+    grid = np.linspace(float(held["minutes"].min()), float(held["minutes"].max()), points)
+    out = pd.DataFrame({
+        "minutes": grid,
+        "ibts": np.interp(grid, held["minutes"], held["ibts"]),
+    })
+    if held["ror"].notna().any():
+        out["ror"] = np.interp(grid, held["minutes"], held["ror"].ffill().bfill())
+    else:
+        out["ror"] = np.gradient(out["ibts"], out["minutes"])
+    out["measured"] = True
+    return out
+
+
+def anchors(curve: pd.DataFrame, how_many: int = ANCHORS) -> list[dict]:
+    """The handles: a few points on the rate of rise, evenly spread.
+
+    Returned as `[{minutes, ror, ibts}]`, which is what the editor draws and
+    hands back when somebody has pulled them about.
+    """
+    if curve is None or curve.empty:
+        return []
+    at = np.linspace(float(curve["minutes"].min()), float(curve["minutes"].max()), how_many)
+    return [{"minutes": round(float(moment), 2),
+             "ror": round(float(np.interp(moment, curve["minutes"], curve["ror"])), 2),
+             "ibts": round(float(np.interp(moment, curve["minutes"], curve["ibts"])), 1)}
+            for moment in at]
+
+
+def calibration(held: list[dict], start: float, ends_at: float) -> float:
+    """What to multiply the integral by so an untouched curve lands where it did.
+
+    Nine handles cannot carry every wiggle of a real roast, so integrating them
+    lands a few degrees off. Measuring that error once, on the curve *before*
+    anybody drags anything, means the untouched case is exact and every edit
+    reads as a change from the truth rather than from an approximation.
+    """
+    if not held or not np.isfinite(ends_at):
+        return 1.0
+    drawn = redraw(held, start)
+    climb = float(drawn["ibts"].iloc[-1]) - float(start)
+    if abs(climb) < 1:
+        return 1.0
+    return float(np.clip((float(ends_at) - float(start)) / climb, 0.5, 2.0))
+
+
+def redraw(held: list[dict], start: float, points: int = 90,
+           gain: float = 1.0) -> pd.DataFrame:
+    """The curve those handles describe, with temperature as the integral.
+
+    This is the half that makes dragging honest. A roaster pulling the rate of
+    rise up through Maillard is saying *put more heat in here*, and the
+    temperature curve has to answer — arriving at first crack sooner, and at a
+    higher temperature by the drop. Drawing the two independently would let
+    somebody draw a roast that cannot exist.
+    """
+    if not held:
+        return pd.DataFrame(columns=["minutes", "ibts", "ror"])
+    at = np.array([float(item["minutes"]) for item in held])
+    rate = np.array([float(item["ror"]) for item in held])
+    grid = np.linspace(at.min(), at.max(), points)
+    drawn = np.interp(grid, at, rate)
+    # The same rounding of the joins the editor does in the browser. Straight
+    # lines between handles put corners in a curve, and a drum has too much mass
+    # to turn a corner.
+    window = max(3, int(round(points / 20)) | 1)
+    smooth = pd.Series(drawn).rolling(window, center=True, min_periods=1).mean().to_numpy()
+    climb = np.concatenate([[0.0], np.cumsum(np.diff(grid) * smooth[:-1])]) * float(gain)
+    return pd.DataFrame({"minutes": grid, "ror": smooth,
+                         "ibts": float(start) + climb, "measured": False})
+
+
+def phase_of(minutes: float, first_crack: float | None, yellowing: float | None) -> str:
+    """Which phase a moment belongs to, for looking up what a control is worth."""
+    crack = float(first_crack) if first_crack else None
+    yellow = float(yellowing) if yellowing else (crack * 0.55 if crack else None)
+    if crack and minutes >= crack:
+        return "Development"
+    if yellow and minutes >= yellow:
+        return "Maillard"
+    return "Drying"
+
+
+def from_curve(plan: dict, held: list[dict], was: list[dict], first_crack=None,
+               yellowing=None) -> dict:
+    """The recipe that follows from a curve somebody has pulled about.
+
+    A rate of rise is not a thing you can set on a Bullet. Power is. So the
+    change is read phase by phase — *this roaster wants 3 °C/min more through
+    Maillard* — and turned into control steps by the effect sizes the app has
+    fitted to **this machine**: how much one step of power has actually moved the
+    rate of rise, in their own roasts. Where there is no effect size yet, a prior
+    stands in and the step says `assumed` rather than `learned`.
+
+    Nothing here invents a step the machine cannot make. Power is whole numbers
+    between 0 and 9, and a change smaller than one of them is not a change.
+    """
+    made = _copy(plan)
+    if not held or not was:
+        return made
+
+    now = {item["minutes"]: float(item["ror"]) for item in held}
+    before = {item["minutes"]: float(item["ror"]) for item in was}
+    shared = sorted(set(now) & set(before))
+    if not shared:
+        return made
+
+    # What was asked for, phase by phase.
+    wanted: dict[str, list] = {}
+    for moment in shared:
+        wanted.setdefault(phase_of(moment, first_crack, yellowing), []).append(
+            now[moment] - before[moment])
+
+    for phase, changes in wanted.items():
+        change = float(np.mean(changes))
+        if abs(change) < 0.75:                # smaller than the curve's own wobble
+            continue
+
+        key = f"power@{phase}->avgRoR{phase}"
+        steps, sure, seen = learning.steps_to_move(key, change)
+        basis = "learned" if seen >= 2 else "assumed"
+        whole = int(np.sign(steps) * max(1, round(abs(steps)))) if abs(steps) >= 0.5 else 0
+        if not whole:
+            continue
+
+        where = _phase_window(made, phase, first_crack, yellowing)
+        touched = False
+        for step in made["steps"]:
+            if step["control"] != "power" or step.get("ibts") is None:
+                continue
+            if not (where[0] <= step["ibts"] <= where[1]):
+                continue
+            moved = _whole((step["to"] or 0) + whole, "power")
+            if moved is not None and moved != step["to"]:
+                step["from"], step["to"] = step["to"], moved
+                step["why"] = (f"{abs(change):.1f} °C/min "
+                               f"{'more' if change > 0 else 'less'} through {phase.lower()}")
+                step["basis"] = basis
+                touched = True
+
+        made["provenance"].append({
+            "what": f"{phase}: {change:+.1f} °C/min → power {whole:+d}",
+            "basis": basis,
+            "detail": (
+                f"You pulled the rate of rise {abs(change):.1f} °C/min "
+                f"{'up' if change > 0 else 'down'} through {phase.lower()}. On this "
+                f"machine one step of power has moved it by about "
+                f"{abs(change / whole):.1f} °C/min, fitted from {seen} pair(s) of your "
+                f"own roasts — so that is {abs(whole)} step(s)."
+                if basis == "learned" else
+                f"You pulled the rate of rise {abs(change):.1f} °C/min "
+                f"{'up' if change > 0 else 'down'} through {phase.lower()}. The app has "
+                f"not seen enough of your roasts to know what a power step is worth "
+                f"there yet, so this uses a starting figure. Roast it and it will learn "
+                f"the real one.")
+            + ("" if touched else
+               f" There was no power step in {phase.lower()} to move, so this is a "
+               "change to make and nothing in the list has moved — add one at the "
+               "temperature you want it."),
+        })
+
+    made["curve"] = [dict(item) for item in held]
+    return made
+
+
+def _phase_window(plan: dict, phase: str, first_crack=None, yellowing=None) -> tuple:
+    """The IBTS temperatures a phase covers, so a step can be found inside it."""
+    steps = sorted((step.get("ibts") or 0) for step in plan.get("steps") or [])
+    drop = _number((plan.get("drop") or {}).get("ibts")) or 215.0
+    lowest = steps[0] if steps else 120.0
+    if phase == "Development":
+        return (drop - 25.0, drop + 5.0)
+    if phase == "Maillard":
+        return (lowest + 15.0, drop - 25.0)
+    return (0.0, lowest + 15.0)

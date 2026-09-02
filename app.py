@@ -18,6 +18,7 @@ from roastcoach import (auth, charts, coach, db, demo_data, design, diagnostics,
                         evidence, knowledge, learning, library, recipe, store)
 from roastcoach.curves import create_roast_samples, roast_events
 from roastcoach import metrics as metric_rules
+from roastcoach import uploader
 from roastcoach.naming import label_for
 
 ASSETS = Path(__file__).parent / "assets"
@@ -2182,6 +2183,83 @@ def page_after():
     after_the_roast(row, frame)
 
 
+def shape_the_curve(plan, curve=None, row=None):
+    """Draw the roast, pull it about, and let the recipe follow.
+
+    The recipe and the curve are two views of one thing, and until now only one
+    of them was on screen. A roaster does not think *power 7 at 176 °C*; they
+    think *it is climbing too fast through the middle*. So the rate of rise is
+    the thing you touch, and the settings are what falls out of touching it —
+    through the effect sizes the app has fitted to this machine, so the answer is
+    this roaster's arithmetic and not a rule of thumb.
+    """
+    row = row or {}
+    projected = optional(design, "projection", plan, curve,
+                         after=row.get("turningPointTime"), default=None)
+    if projected is None or getattr(projected, "empty", True):
+        return plan
+
+    handles = optional(design, "anchors", projected, default=[])
+    if not handles:
+        return plan
+
+    start = float(projected["ibts"].iloc[0])
+    gain = optional(design, "calibration", handles, start,
+                    float(projected["ibts"].iloc[-1]), default=1.0)
+
+    st.markdown("### The roast as a curve")
+    st.caption(
+        "The dashed line is the roast this came from, where there is one. The solid "
+        "line is what you are planning. Drag a handle on the **rate of rise** to ask "
+        "for more or less heat through that part of the roast — the temperature above "
+        "follows, because it is the sum of what you draw, and the recipe below follows "
+        "from that."
+        if curve is not None and not getattr(curve, "empty", True) else
+        "Drag a handle on the **rate of rise** to shape the roast. The temperature above "
+        "is the sum of what you draw, and the recipe below follows from it.")
+
+    ghost = []
+    if curve is not None and not getattr(curve, "empty", True):
+        ghost = [{"minutes": round(float(item.minutes), 2),
+                  "ibts": round(float(item.ibts), 1),
+                  "ror": round(float(item.ror), 2)}
+                 for item in projected.itertuples() if pd.notna(item.ror)]
+
+    drawn = optional(uploader, "curve_editor", handles, ghost, start, gain,
+                     row.get("firstCrackTime"),
+                     (plan.get("drop") or {}).get("ibts"), theme(),
+                     f"curve_{plan.get('from_roast') or 'blank'}",
+                     crack_ibts=pick(row, "drumTemperatureFirstCrackStart",
+                                     "firstCrackTemp") if row else None,
+                     default=None)
+
+    if not drawn or not drawn.get("dirty"):
+        return plan
+
+    pulled = drawn.get("handles") or []
+    made = optional(design, "from_curve", plan, pulled, handles,
+                    row.get("firstCrackTime"), row.get("yellowPointTime"), default=plan)
+
+    # What the curve they drew actually implies, as numbers rather than a shape.
+    redrawn = optional(design, "redraw", pulled, start, gain=gain, default=None)
+    if redrawn is not None and not redrawn.empty:
+        lands = float(redrawn["ibts"].iloc[-1])
+        was = float(projected["ibts"].iloc[-1])
+        columns = st.columns(3)
+        columns[0].metric("Where it now ends", f"{lands:.0f} °C", f"{lands - was:+.0f} °C")
+        columns[1].metric("Planned drop",
+                          f"{float((made.get('drop') or {}).get('ibts') or 0):.0f} °C")
+        columns[2].metric("Peak rate of rise", f"{float(redrawn['ror'].max()):.0f} °C/min")
+        if abs(lands - float((made.get("drop") or {}).get("ibts") or lands)) > 6:
+            st.warning(
+                f"The curve you have drawn arrives at {lands:.0f} °C, and the plan says "
+                f"drop at {float((made.get('drop') or {}).get('ibts') or 0):.0f} °C. One "
+                "of the two has to give — either drop where the curve lands, or take "
+                "heat out earlier so it lands where you meant.",
+                icon=":material/call_split:")
+    return made
+
+
 def page_design():
     """Building a roast that has not happened yet.
 
@@ -2200,7 +2278,7 @@ def page_design():
         help="Starting from one of your own roasts is much the stronger of the two: "
              "it is a profile this machine has actually run, not one somebody wrote.")
 
-    plan = None
+    plan, source_curve, source_row = None, None, {}
     if starting.startswith("a roast"):
         if frame.empty:
             st.info("No roasts yet — start from the library instead.")
@@ -2222,6 +2300,8 @@ def page_design():
         source = frame[frame["uid"] == labels[chosen]].iloc[0]
         moves = moves_for(source["uid"], token())
         plan = optional(design, "from_roast", source.to_dict(), moves, default=None)
+        source_curve, _ = curve_of(source["uid"])
+        source_row = source.to_dict()
         if plan and not plan.get("level"):
             st.warning(
                 "That roast has no roast level recorded, so a level change has nothing "
@@ -2285,6 +2365,8 @@ def page_design():
           "assumed": "The weakest part of this is reasoning nobody has checked. It is a "
                      "hypothesis to roast and measure, not an instruction."}[sure],
          icon=":material/science:")
+
+    plan = shape_the_curve(plan, source_curve, source_row)
 
     st.markdown("### The roast, step by step")
     table = optional(design, "as_table", plan, default=pd.DataFrame())

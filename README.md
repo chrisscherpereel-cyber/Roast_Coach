@@ -218,6 +218,20 @@ charge^0.70 — less than proportional, because the heat lost to the drum and th
 does not shrink with the charge — saying so plainly when it does. The charge temperature
 moves with it, about 5 °C per 100 g.
 
+**The roast is a curve you can pull about.** The plan is drawn as two panels — IBTS
+temperature above, its rate of rise below — with the roast it came from ghosted behind.
+Drag a handle on the rate of rise and the temperature answers immediately, because it is
+the integral of what you drew: pull more heat into Maillard and first crack moves from
+9.1 min to 6.6, and the roast ends 23 °C hotter. An untouched curve redraws to where the
+roast actually ended, to the degree, so every edit reads as a change from the truth rather
+than from an approximation.
+
+Then the recipe follows. A rate of rise is not something a Bullet can be set to — power
+is — so the change is read phase by phase and converted into control steps by the effect
+sizes fitted to *your* machine: *you pulled Maillard up 2 °C/min; one step of power has
+moved it 1.9 °C/min in your roasts; that is one step.* Where the app has not learned that
+yet it says `assumed` and uses a starting figure until your roasts replace it.
+
 A plan leaves three ways: **on screen** step by step, as a **RoasTime recipe file** in
 their own format to import on the machine, and as a **printable one-pager** with blanks for
 what actually happened. Nothing is ever written into RoasTime's folder.
@@ -479,6 +493,7 @@ roastcoach/
   evidence.py               the grades A–D, and who each claim rests on
   library.py                beans, recipes, machines — and joining them to roasts
   design.py                 building a roast that has not happened yet
+  frontend/curve/           the draggable rate-of-rise editor
   knowledge.py              the six sources in library/, and what each is silent on
   auth.py                   who is allowed in
   uploader.py, frontend/    the drop box, and an optional watched folder

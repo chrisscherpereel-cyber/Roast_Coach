@@ -1,0 +1,315 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  :root {
+    --surface: #fcfcfb; --text: #0b0b0b; --muted: #52514e; --grid: #e6e5e1;
+    --planned: #2a78d6; --ghost: #8a8880; --warm: #eb6834; --ok: #1baf7a;
+  }
+  body.dark {
+    --surface: #1a1a19; --text: #ffffff; --muted: #c3c2b7; --grid: #38383a;
+    --planned: #3987e5; --ghost: #8a8880; --warm: #d95926; --ok: #199e70;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--surface); color: var(--text);
+    font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+  }
+  .bar {
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+    padding: 2px 4px 8px;
+  }
+  .bar b { font-size: 13px; }
+  .read { color: var(--muted); }
+  .read span { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+  button {
+    font: inherit; padding: 4px 10px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--grid); background: var(--surface); color: var(--text);
+  }
+  button:hover { border-color: var(--muted); }
+  svg { display: block; width: 100%; touch-action: none; }
+  .handle { cursor: ns-resize; }
+  .handle:hover circle, .handle.held circle { r: 8; }
+  .hint { padding: 6px 4px 0; color: var(--muted); }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>Pull the rate of rise about</b>
+  <span class="read">first crack <span id="crack">—</span></span>
+  <span class="read">ends at <span id="end">—</span></span>
+  <span class="read">total <span id="total">—</span></span>
+  <button id="reset" type="button">Put it back</button>
+</div>
+<svg id="plot" viewBox="0 0 900 460" preserveAspectRatio="xMidYMid meet"></svg>
+<div class="hint" id="hint">
+  Drag a handle up or down to ask for more or less heat. The temperature above
+  follows, because it is the sum of what you draw — and the recipe underneath
+  follows from that.
+</div>
+
+<script>
+const NS = "http://www.w3.org/2000/svg";
+let state = {handles: [], base: [], ghost: [], start: 90, gain: 1,
+             crack_at: null, drop_ibts: null, held: null, dirty: false};
+
+// --- Streamlit's side of the conversation ------------------------------------
+function send(value) {
+  window.parent.postMessage(
+    {isStreamlitMessage: true, type: "streamlit:setComponentValue", value}, "*");
+}
+function grew() {
+  window.parent.postMessage(
+    {isStreamlitMessage: true, type: "streamlit:setFrameHeight",
+     height: document.body.scrollHeight + 8}, "*");
+}
+
+window.addEventListener("message", (event) => {
+  if (!event.data || event.data.type !== "streamlit:render") return;
+  const args = event.data.args || {};
+  if (args.theme === "dark") document.body.classList.add("dark");
+  state.handles = (args.handles || []).map((point) => ({...point}));
+  state.base = (args.handles || []).map((point) => ({...point}));
+  state.ghost = args.ghost || [];
+  state.start = args.start ?? 90;
+  state.gain = args.gain ?? 1;
+  state.crack_at = args.first_crack ?? null;
+  state.crack_ibts = args.crack_ibts ?? null;
+  state.drop_ibts = args.drop ?? null;
+  state.dirty = false;
+  draw();
+  grew();
+});
+
+// --- the roast the handles describe -------------------------------------------
+// Temperature is the integral of the rate of rise, so the two panels cannot
+// disagree. This is the same arithmetic design.redraw() does in Python; it runs
+// here as well so dragging is immediate rather than a round trip.
+function projected() {
+  const handles = state.handles;
+  if (handles.length < 2) return [];
+  const first = handles[0].minutes, last = handles[handles.length - 1].minutes;
+  const steps = 180, span = (last - first) / steps;
+
+  // Straight lines between handles would put a corner in the curve, and a roast
+  // does not turn corners — the drum has mass. A short moving average rounds the
+  // joins without moving where the roaster put them. Python does exactly the same
+  // thing, so the recipe that comes back matches the picture.
+  const raw = [];
+  for (let index = 0; index <= steps; index += 1) {
+    raw.push(interpolate(handles, first + span * index));
+  }
+  const smooth = ease(raw, 9);
+
+  const points = [];
+  let ibts = state.start;
+  for (let index = 0; index <= steps; index += 1) {
+    if (index > 0) ibts += smooth[index] * span * state.gain;
+    points.push({minutes: first + span * index, ror: smooth[index], ibts});
+  }
+  return points;
+}
+
+function ease(values, window) {
+  const half = Math.floor(window / 2), out = [];
+  for (let index = 0; index < values.length; index += 1) {
+    let total = 0, count = 0;
+    for (let step = -half; step <= half; step += 1) {
+      const at = index + step;
+      if (at >= 0 && at < values.length) { total += values[at]; count += 1; }
+    }
+    out.push(total / count);
+  }
+  return out;
+}
+
+function interpolate(handles, at) {
+  for (let index = 0; index < handles.length - 1; index += 1) {
+    const left = handles[index], right = handles[index + 1];
+    if (at >= left.minutes && at <= right.minutes) {
+      const along = (at - left.minutes) / (right.minutes - left.minutes || 1);
+      return left.ror + (right.ror - left.ror) * along;
+    }
+  }
+  return handles[handles.length - 1].ror;
+}
+
+// --- drawing -------------------------------------------------------------------
+const WIDE = 900, PAD = {left: 54, right: 16, top: 10, bottom: 26};
+const TOP = {y: 10, height: 210}, LOW = {y: 250, height: 180};
+
+function scales(points) {
+  const times = points.map((point) => point.minutes);
+  const lowT = Math.min(...times), highT = Math.max(...times);
+  const warm = points.map((point) => point.ibts).concat(state.ghost.map((g) => g.ibts));
+  const rates = points.map((point) => point.ror).concat(state.ghost.map((g) => g.ror));
+  return {
+    x: (value) => PAD.left + (value - lowT) / ((highT - lowT) || 1) *
+                  (WIDE - PAD.left - PAD.right),
+    warm: bandFor(warm, TOP), rate: bandFor(rates, LOW),
+    lowT, highT,
+  };
+}
+
+function bandFor(values, box) {
+  const low = Math.min(...values), high = Math.max(...values);
+  const pad = (high - low) * 0.12 || 1;
+  const bottom = low - pad, top = high + pad;
+  return {
+    to: (value) => box.y + box.height - (value - bottom) / ((top - bottom) || 1) * box.height,
+    bottom, top, box,
+  };
+}
+
+function make(name, attrs) {
+  const node = document.createElementNS(NS, name);
+  for (const key in attrs) node.setAttribute(key, attrs[key]);
+  return node;
+}
+
+function line(points, scale, band, colour, width, dash) {
+  const path = points.map((point, index) =>
+    `${index ? "L" : "M"}${scale.x(point.minutes).toFixed(1)},${band.to(point.value).toFixed(1)}`
+  ).join(" ");
+  return make("path", {d: path, fill: "none", stroke: colour, "stroke-width": width,
+                       "stroke-dasharray": dash || "", "stroke-linejoin": "round"});
+}
+
+function draw() {
+  const plot = document.getElementById("plot");
+  plot.innerHTML = "";
+  const points = projected();
+  if (!points.length) return;
+  const scale = scales(points);
+
+  for (const [band, label, unit] of [[scale.warm, "IBTS °C", ""],
+                                     [scale.rate, "IBTS rate of rise", "°C/min"]]) {
+    plot.appendChild(make("rect", {x: PAD.left, y: band.box.y,
+      width: WIDE - PAD.left - PAD.right, height: band.box.height,
+      fill: "none", stroke: "var(--grid)"}));
+    for (let step = 0; step <= 4; step += 1) {
+      const value = band.bottom + (band.top - band.bottom) * step / 4;
+      const y = band.to(value);
+      plot.appendChild(make("line", {x1: PAD.left, x2: WIDE - PAD.right, y1: y, y2: y,
+        stroke: "var(--grid)", "stroke-width": step ? 0.5 : 0.5}));
+      const text = make("text", {x: PAD.left - 6, y: y + 4, "text-anchor": "end",
+        fill: "var(--muted)", "font-size": 10});
+      text.textContent = value.toFixed(0);
+      plot.appendChild(text);
+    }
+    const title = make("text", {x: PAD.left, y: band.box.y - 2, fill: "var(--muted)",
+                                "font-size": 11});
+    title.textContent = label + (unit ? ` (${unit})` : "");
+    plot.appendChild(title);
+  }
+
+  // minutes along the bottom
+  for (let minute = Math.ceil(scale.lowT); minute <= scale.highT; minute += 2) {
+    const x = scale.x(minute);
+    const text = make("text", {x, y: LOW.y + LOW.height + 16, "text-anchor": "middle",
+                               fill: "var(--muted)", "font-size": 10});
+    text.textContent = minute;
+    plot.appendChild(text);
+  }
+
+  // the roast as it was, behind
+  if (state.ghost.length) {
+    plot.appendChild(line(state.ghost.map((g) => ({minutes: g.minutes, value: g.ibts})),
+                          scale, scale.warm, "var(--ghost)", 1.5, "4 3"));
+    plot.appendChild(line(state.ghost.map((g) => ({minutes: g.minutes, value: g.ror})),
+                          scale, scale.rate, "var(--ghost)", 1.5, "4 3"));
+  }
+
+  // the roast being planned
+  plot.appendChild(line(points.map((p) => ({minutes: p.minutes, value: p.ibts})),
+                        scale, scale.warm, "var(--planned)", 2.4));
+  plot.appendChild(line(points.map((p) => ({minutes: p.minutes, value: p.ror})),
+                        scale, scale.rate, "var(--planned)", 2.4));
+
+  // where first crack lands, and where the plan says to drop
+  if (state.drop_ibts) {
+    const y = scale.warm.to(state.drop_ibts);
+    plot.appendChild(make("line", {x1: PAD.left, x2: WIDE - PAD.right, y1: y, y2: y,
+      stroke: "var(--warm)", "stroke-width": 1, "stroke-dasharray": "5 4"}));
+    const label = make("text", {x: WIDE - PAD.right - 2, y: y - 4, "text-anchor": "end",
+      fill: "var(--warm)", "font-size": 10});
+    label.textContent = `drop ${state.drop_ibts.toFixed(0)} °C`;
+    plot.appendChild(label);
+  }
+
+  // the handles
+  state.handles.forEach((point, index) => {
+    const group = make("g", {class: "handle" + (state.held === index ? " held" : ""),
+                             "data-index": index});
+    group.appendChild(make("circle", {cx: scale.x(point.minutes),
+      cy: scale.rate.to(point.ror), r: 6, fill: "var(--surface)",
+      stroke: "var(--planned)", "stroke-width": 2.5}));
+    group.appendChild(make("circle", {cx: scale.x(point.minutes),
+      cy: scale.rate.to(point.ror), r: 16, fill: "transparent"}));
+    plot.appendChild(group);
+  });
+
+  readout(points);
+  hold(plot, scale);
+}
+
+function readout(points) {
+  const last = points[points.length - 1];
+  let crack = null;
+  if (state.crack_ibts) {   // where this curve reaches the temperature it cracked at
+    for (const point of points) {
+      if (point.ibts >= state.crack_ibts) { crack = point.minutes; break; }
+    }
+  } else if (state.crack_at !== null) {
+    crack = state.crack_at;
+  }
+  document.getElementById("crack").textContent = crack ? `${crack.toFixed(1)} min` : "—";
+  document.getElementById("end").textContent = `${last.ibts.toFixed(0)} °C`;
+  document.getElementById("total").textContent = `${last.minutes.toFixed(1)} min`;
+}
+
+// --- dragging ------------------------------------------------------------------
+function hold(plot, scale) {
+  plot.querySelectorAll(".handle").forEach((group) => {
+    group.addEventListener("pointerdown", (event) => {
+      state.held = Number(group.dataset.index);
+      group.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+    group.addEventListener("pointermove", (event) => {
+      if (state.held === null) return;
+      const box = plot.getBoundingClientRect();
+      const y = (event.clientY - box.top) * (460 / box.height);
+      const band = scale.rate;
+      const value = band.bottom + (band.box.y + band.box.height - y) /
+                    band.box.height * (band.top - band.bottom);
+      state.handles[state.held].ror = Math.max(-10, Math.min(80, value));
+      state.dirty = true;
+      draw();
+    });
+    const let_go = () => {
+      if (state.held === null) return;
+      state.held = null;
+      draw();
+      send({handles: state.handles, dirty: state.dirty, at: Date.now()});
+    };
+    group.addEventListener("pointerup", let_go);
+    group.addEventListener("pointercancel", let_go);
+  });
+}
+
+document.getElementById("reset").addEventListener("click", () => {
+  state.handles = state.base.map((point) => ({...point}));
+  state.dirty = false;
+  draw();
+  send({handles: state.handles, dirty: false, at: Date.now()});
+});
+
+window.parent.postMessage({isStreamlitMessage: true, type: "streamlit:componentReady",
+                           apiVersion: 1}, "*");
+grew();
+</script>
+</body>
+</html>

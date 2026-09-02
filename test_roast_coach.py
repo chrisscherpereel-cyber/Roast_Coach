@@ -773,6 +773,69 @@ check(set(item["basis"] for item in _dark["provenance"]) <= set(design.BASIS),
 check(design.confidence(_dark) in ("assumed", "library"),
       "and a plan is only as good as its weakest part", design.confidence(_dark))
 
+# The plan as a curve you can pull about. This is the half that turns a recipe
+# from a table into something a roaster can argue with.
+from roastcoach.curves import create_roast_samples as _samples_for  # noqa: E402
+
+_shape = _samples_for(store.roast_dict("design-3"), drop_factor=2)
+_projected = design.projection(_base, _shape, after=_seed.get("turningPointTime"))
+check(not _projected.empty and bool(_projected["measured"].iloc[0]),
+      "a plan built from a roast projects that roast's own curve, not a drawing",
+      f"{len(_projected)} points")
+check(_projected["ror"].iloc[0] < 60,
+      "starting after the sensor has settled — for the first minute the IBTS reads its "
+      "own recovery at nearly 100 °C/min, which is not the roast heating",
+      f"starts at {_projected['ror'].iloc[0]:.0f} °C/min")
+
+_handles = design.anchors(_projected)
+check(len(_handles) == design.ANCHORS and all("ror" in item for item in _handles),
+      "and offers a few handles rather than every sample — nine points is shaping a "
+      "roast, ninety is drawing one", f"{len(_handles)} handles")
+
+# Temperature is the integral of the rate of rise, so the two panels cannot
+# disagree — and an untouched curve has to reproduce the roast exactly, or every
+# edit reads as a change from an approximation.
+_start = float(_projected["ibts"].iloc[0])
+_ends = float(_projected["ibts"].iloc[-1])
+_gain = design.calibration(_handles, _start, _ends)
+_again = design.redraw(_handles, _start, gain=_gain)
+check(abs(float(_again["ibts"].iloc[-1]) - _ends) < 1.0,
+      "an untouched curve redraws to where the roast actually ended, to the degree",
+      f"{float(_again['ibts'].iloc[-1]):.1f} vs {_ends:.1f} °C")
+
+_pulled = [dict(item) for item in _handles]
+for _item in _pulled:
+    if _projected["minutes"].min() + 2 < _item["minutes"] < _projected["minutes"].max() - 2:
+        _item["ror"] += 4.0
+_hotter = design.redraw(_pulled, _start, gain=_gain)
+check(float(_hotter["ibts"].iloc[-1]) > float(_again["ibts"].iloc[-1]) + 5,
+      "pulling the rate of rise up through the middle ends the roast hotter, because "
+      "the temperature is the sum of what you drew",
+      f"{float(_again['ibts'].iloc[-1]):.0f} → {float(_hotter['ibts'].iloc[-1]):.0f} °C")
+
+# And the recipe follows: a rate of rise is not something a Bullet can be set to,
+# power is, so the change is turned into steps by what a step is worth here.
+_redesigned = design.from_curve(_base, _pulled, _handles,
+                                first_crack=_seed.get("firstCrackTime"))
+_before = {step["ibts"]: step["to"] for step in _base["steps"] if step["control"] == "power"}
+_after = {step["ibts"]: step["to"] for step in _redesigned["steps"] if step["control"] == "power"}
+check(any(_after[at] > _before[at] for at in _before if at in _after),
+      "asking for more heat puts power up in the recipe, not just on the picture",
+      " · ".join(f"{_before[at]}→{_after[at]}" for at in sorted(_before) if at in _after))
+check(any("°C/min" in item["what"] for item in _redesigned["provenance"]),
+      "and says what was asked for and what it cost in steps",
+      next((item["what"] for item in _redesigned["provenance"] if "°C/min" in item["what"]), ""))
+check(all(0 <= step["to"] <= 9 for step in _redesigned["steps"] if step["control"] == "power"),
+      "while never proposing a setting the machine does not have")
+check(design.from_curve(_base, _handles, _handles)["steps"] == _base["steps"],
+      "and a curve nobody has touched changes nothing")
+
+check(design.phase_of(2.0, 8.0, 4.0) == "Drying"
+      and design.phase_of(6.0, 8.0, 4.0) == "Maillard"
+      and design.phase_of(9.0, 8.0, 4.0) == "Development",
+      "a moment on the curve knows which phase it is in, which is how it finds an "
+      "effect size to convert against")
+
 # Getting it out.
 _file = design.as_roastime(_dark, "Test French 800g")
 check(_file["startSettings"] and _file["events"] and _file["endSettings"],

@@ -37,6 +37,26 @@ _folder = components.declare_component(
     "roast_folder", path=str(Path(__file__).parent / "frontend" / "folder")
 )
 
+_curve = components.declare_component(
+    "roast_curve", path=str(Path(__file__).parent / "frontend" / "curve")
+)
+
+
+def curve_editor(handles, ghost=None, start=90.0, gain=1.0, first_crack=None,
+                 drop=None, theme="light", key="curve", crack_ibts=None):
+    """The rate of rise, as something to pull about rather than read.
+
+    Streamlit can draw a chart; it cannot let anybody drag one. So this is a
+    component of its own: the handles go out, the roaster pulls them, and what
+    comes back is the curve they drew. Temperature is redrawn in the browser as
+    the integral of the rate of rise, so the picture answers under the hand
+    instead of after a round trip — and Python does the same arithmetic again
+    when it turns the curve into a recipe, so the two never disagree.
+    """
+    return _curve(handles=handles, ghost=ghost or [], start=start, gain=gain,
+                  first_crack=first_crack, crack_ibts=crack_ibts, drop=drop,
+                  theme=theme, key=key, default=None)
+
 
 def add_roasts_button(known: dict, key: str = "uploader"):
     """The Add roasts control. Returns whatever the browser last sent.
